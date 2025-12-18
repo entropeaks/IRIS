@@ -1,5 +1,4 @@
 import fiftyone.brain as fob
-from src.data import extractPaths
 import fiftyone as fo
 from pathlib import Path
 import torch
@@ -7,7 +6,7 @@ import numpy as np
 from torch.utils.data import DataLoader
 from src.model import SiameseDino
 from src.data import LazyLoadCollection, make_transform
-from src.utils import set_device
+from src.utils import set_device, Browser
 from transformers import AutoModel, AutoImageProcessor
 from tqdm import tqdm
 from umap import UMAP
@@ -35,21 +34,22 @@ def compute_embeddings(model, images_paths: list[Path], labels: list[int]):
     embeddings = np.concatenate(embeddings, axis=0)
     return embeddings
 
-checkpoint = "magic-field-141"
+checkpoint = "sandy-fire-218"
 processor = AutoImageProcessor.from_pretrained("facebook/dinov3-vitb16-pretrain-lvd1689m")
 dinov3_model = AutoModel.from_pretrained(
     "facebook/dinov3-vitb16-pretrain-lvd1689m",
     dtype=torch.float32
 )
-hidden_dim = 512
+hidden_dim = 0
 output_dim = 128
 device = set_device("cuda")
 siamese_model = SiameseDino(dinov3_model, hidden_dim, output_dim)
 siamese_model.load_state_dict(torch.load(f"model_checkpoints/{checkpoint}.pth"))
 _ = siamese_model.to(device)
 
-data_root_path = Path("data/original_data")
-images_paths, labels = extractPaths(data_root_path)
+data_root_path = Path("data/augmented_data16_v3")
+browser = Browser(data_root_path)
+images_paths, labels = browser.sample_k_per_class(4)
 
 samples = []
 print("Loading samples...")

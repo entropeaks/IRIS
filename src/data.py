@@ -239,15 +239,13 @@ class ImageCollectionDataset(ABC):
 class CachedCollection(ImageCollectionDataset, Dataset):
     def __init__(self, images_paths: list[Path], labels: list[int], transform: v2.Compose=None):
         super().__init__(images_paths, labels, transform)
-        self.images_instances, self.paths = self.load_images()
+        self.images_instances = self.load_images()
 
     def load_images(self) -> list:
         images_instances = []
-        paths = []
         for path in self.images_paths:
             images_instances.append(v2.Resize((224, 224))(load_image(path)))
-            paths.append(path)
-        return images_instances, paths
+        return images_instances
 
     def __len__(self):
         return len(self.images_instances)

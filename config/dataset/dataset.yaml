@@ -1,2 +1,2 @@
-original_dataset_path: "data/original_data_color_invariant"
-augmented_dataset_path: "data/augmented_data16_color_invariant"
+original_dataset_path: "data/original_data"
+augmented_dataset_path: "data/original_data"

@@ -18,17 +18,16 @@ from torchvision.transforms import v2
 @hydra.main(config_path="../config", config_name="base_config", version_base=None)
 def main(config: Config):
 
-    train_transforms = v2.Compose([
-        v2.RandomResizedCrop(size=(224, 224), scale=(0.8, 1.0)),   
-        v2.RandomHorizontalFlip(p=0.5),                            
-        v2.RandomVerticalFlip(p=0.1),                              
-        v2.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2, hue=0.1), 
-        v2.RandomRotation(degrees=15),                             
+    train_transforms = v2.Compose([                           
+        v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0), 
+        v2.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 0.9)),
+        v2.RandomRotation(degrees=15),
     ])
 
     device = set_device(config.base.device)
 
     RANDOM_STATE = 42
+    RESIZE_SIZE = 224
     
     processor = AutoImageProcessor.from_pretrained(config.model.backbone_name)
     backbone = AutoModel.from_pretrained(config.model.backbone_name, dtype=torch.float32)
@@ -45,17 +44,17 @@ def main(config: Config):
     val_query_paths, val_query_labels = data_splits["val_query"]
     test_query_paths, test_query_labels = data_splits["test_query"]
 
-    train_dataset = CachedCollection(train_paths, train_labels, transform=v2.Compose([train_transforms, make_transform()]))
+    train_dataset = CachedCollection(train_paths, train_labels, transform=v2.Compose([train_transforms, make_transform(RESIZE_SIZE)]))
     pksampler = PKSampler(train_dataset, config.train.sampler_P, config.train.sampler_K)
     train_dataloader = DataLoader(train_dataset, batch_sampler=pksampler)
 
-    gallery_dataset = CachedCollection(gallery_paths, gallery_labels, transform=make_transform())
+    gallery_dataset = CachedCollection(gallery_paths, gallery_labels, transform=make_transform(RESIZE_SIZE))
     gallery_dataloader = DataLoader(gallery_dataset, batch_size=32)
 
-    val_dataset = CachedCollection(val_query_paths, val_query_labels, transform=make_transform())
+    val_dataset = CachedCollection(val_query_paths, val_query_labels, transform=make_transform(RESIZE_SIZE))
     val_dataloader = DataLoader(val_dataset, batch_size=32)
 
-    test_dataset = CachedCollection(test_query_paths, test_query_labels, transform=make_transform())
+    test_dataset = CachedCollection(test_query_paths, test_query_labels, transform=make_transform(RESIZE_SIZE))
     test_dataloader = DataLoader(test_dataset, batch_size=32)
 
     # --------------------------------------------------------------------------

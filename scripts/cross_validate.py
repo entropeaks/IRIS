@@ -22,11 +22,9 @@ from torchvision.transforms import v2
 @hydra.main(config_path="../config", config_name="base_config", version_base=None)
 def main(config: Config):
 
-    train_transforms = v2.Compose([
-        v2.RandomResizedCrop(size=(224, 224), scale=(0.8, 1.0)),   
-        v2.RandomHorizontalFlip(p=0.5),                            
-        v2.RandomVerticalFlip(p=0.1),                              
-        v2.ColorJitter(brightness=0.3, contrast=0.3, saturation=0, hue=0), 
+    train_transforms = v2.Compose([                             
+        v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0), 
+        v2.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 0.9)),
         v2.RandomRotation(degrees=15),                             
     ])
 
@@ -68,13 +66,13 @@ def main(config: Config):
         siamese_model = SiameseDino(backbone, hidden_dim=config.model.hidden_dim, output_dim=config.model.output_dim, normalize=config.model.normalize, dropout=config.model.dropout)
         for param in siamese_model.backbone.parameters():
             param.requires_grad = False
-        for param in siamese_model.backbone.layer[:2].parameters():
+        for param in siamese_model.backbone.layer[-2:].parameters():
             param.requires_grad = True
         _ = siamese_model.to(device)
 
         optim_params = [
             {"params": siamese_model.projection_head.parameters(), "lr": config.train.head_lr},
-            {"params": siamese_model.backbone.layer[:2].parameters(), "lr": config.train.backbone_lr}
+            {"params": siamese_model.backbone.layer[-2:].parameters(), "lr": config.train.backbone_lr}
         ]
 
         run = wandb.init(project=config.base.wandb_project_name,
