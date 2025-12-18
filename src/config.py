@@ -40,6 +40,7 @@ class BaseConfig:
     wandb_project_name: str=""
     wandb_entity: str=""
     device: str="cpu"
+    model_checkpoints_path: str="model_checkpoints"
 
 
 @dataclass

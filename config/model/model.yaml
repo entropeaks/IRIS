@@ -1,5 +1,5 @@
 backbone_name: "facebook/dinov3-vitb16-pretrain-lvd1689m"
-hidden_dim: 512
+hidden_dim: 0
 output_dim: 128
 normalize: true
 dropout: 0

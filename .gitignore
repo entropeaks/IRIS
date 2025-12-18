@@ -12,6 +12,7 @@ notebooks/draft.ipynb
 wandb/
 model_checkpoints/
 config/base_config.yaml
+outputs/
 
 __pycache__/
 *.py[cod]

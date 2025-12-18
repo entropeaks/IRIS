@@ -1,2 +1,2 @@
-original_dataset_path: "data/augmented_data16"
+original_dataset_path: "data/original_data"
 augmented_dataset_path: "data/original_data"

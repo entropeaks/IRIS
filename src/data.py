@@ -24,117 +24,197 @@ def make_transform(resize_size: int = 224):
     return v2.Compose([to_tensor, resize, to_float, normalize])
 
 
-def create_dataset_splits(
-    original_dir: Path,
-    augmented_dir: Path,
-    train_ratio: float,
-    val_ratio: float,
-    k_query: int,
-    seed: int=RANDOM_SEED
-):
-    """
-    Creates train, gallery, and query splits based on class-level separation.
-    """
-    # Set seeds for reproducibility
-    random.seed(seed)
-    np.random.seed(seed)
-    
-    # 1. Get all available classes (e.g., ["001", "002", ...])
-    # We assume the class folders are the same in both directories
-    if not original_dir.exists():
-        print(f"Error: Original data directory not found at {original_dir}")
-        return None
+def extract_paths_and_labels(directory: Path) -> Tuple[list, list]:
+    paths = []
+    labels = []
+    for class_dir in directory.iterdir():
+        if class_dir.is_dir():
+            for img_path in class_dir.iterdir():
+                paths.append(img_path.as_posix())
+                labels.append(int(class_dir.name))
+
+    return paths, labels
+
+
+class DataPreparator():
+
+    def __init__(self,
+                original_data_path: Path,
+                augmented_data_path: Path,
+                random_seed: int=RANDOM_SEED,
+                shuffle: bool=True
+                ):
+        self.original_data_path = original_data_path
+        self.augmented_data_path = augmented_data_path
+        self.random_seed = random_seed
+        self.classes = self._get_classes()
+        self.num_classes = len(self.classes)
+        if shuffle:
+            self._shuffle_classes()
+
+
+    def _get_classes(self):
+        if not self.original_data_path.exists():
+            print(f"Error: Original data directory not found at {self.original_data_path}")
+            return None
         
-    all_classes = sorted([d.name for d in original_dir.iterdir() if d.is_dir()])
-    num_classes = len(all_classes)
-    
-    if num_classes == 0:
-        print(f"Error: No class folders found in {original_dir}")
-        return None
-
-    print(f"Found {num_classes} total classes.")
-
-    # 2. Split classes into train, val, and test
-    shuffled_classes = np.random.permutation(all_classes)
-    
-    num_train = int(num_classes * train_ratio)
-    num_val = int(num_classes * val_ratio)
-    
-    # Ensure at least 1 class in each split if ratios are small
-    num_train = max(1, num_train)
-    num_val = max(1, num_val)
-    
-    train_classes = set(shuffled_classes[:num_train])
-    val_classes = set(shuffled_classes[num_train : num_train + num_val])
-    test_classes = set(shuffled_classes[num_train + num_val:])
-    
-    print(f"Splitting classes: {len(train_classes)} Train / {len(val_classes)} Val / {len(test_classes)} Test\n")
-
-    # 3. Initialize lists for our dataloaders
-    train_paths, train_labels = [], []
-    gallery_paths, gallery_labels = [], []
-    val_query_paths, val_query_labels = [], []
-    test_query_paths, test_query_labels = [], []
-
-    # 4. Process Train Classes
-    print("Processing Train classes...")
-    for class_name in train_classes:
-        # A. Populate Train Loader (from augmented data)
-        aug_class_dir = augmented_dir / class_name
-        aug_images = [str(p) for p in aug_class_dir.glob('*.*')]
-        train_paths.extend(aug_images)
-        train_labels.extend([int(class_name)] * len(aug_images))
+        all_classes = sorted([d.name for d in self.original_data_path.iterdir() if d.is_dir()])
+        num_classes = len(all_classes)
         
-        # B. Populate Gallery (from original data)
-        # All original samples from train classes go into the gallery
-        orig_class_dir = original_dir / class_name
-        orig_images = [str(p) for p in orig_class_dir.glob('*.*')]
-        gallery_paths.extend(orig_images)
-        gallery_labels.extend([int(class_name)] * len(orig_images))
+        if num_classes == 0:
+            print(f"Error: No class folders found in {self.original_data_path}")
+            return None
 
-    # 5. Process Validation Classes
-    print("Processing Validation classes...")
-    for class_name in val_classes:
-        orig_class_dir = original_dir / class_name
-        all_class_images = [str(p) for p in orig_class_dir.glob('*.*')]
-        random.shuffle(all_class_images) # Shuffle to pick random queries
+        print(f"Found {num_classes} total classes.")
+        return all_classes
         
-        # A. Split into Query and Gallery
-        val_query_paths.extend(all_class_images[:k_query])
-        val_query_labels.extend([int(class_name)] * k_query)
-        
-        gallery_paths.extend(all_class_images[k_query:])
-        gallery_labels.extend([int(class_name)] * (len(all_class_images) - k_query))
 
-    # 6. Process Test Classes
-    print("Processing Test classes...")
-    for class_name in test_classes:
-        orig_class_dir = original_dir / class_name
-        all_class_images = [str(p) for p in orig_class_dir.glob('*.*')]
-        random.shuffle(all_class_images) # Shuffle to pick random queries
-        
-        # A. Split into Query and Gallery
-        test_query_paths.extend(all_class_images[:k_query])
-        test_query_labels.extend([int(class_name)] * k_query)
-        
-        gallery_paths.extend(all_class_images[k_query:])
-        gallery_labels.extend([int(class_name)] * (len(all_class_images) - k_query))
+    def _shuffle_classes(self) -> list:
+        random.seed(self.random_seed)
+        np.random.seed(self.random_seed)
 
-    print("\n--- Data Split Summary ---")
-    print(f"Training Loader:   {len(train_paths):>5} samples from {len(train_classes)} classes (Augmented)")
-    print(f"Gallery Loader:    {len(gallery_paths):>5} samples from {num_classes} classes (Original)")
-    print(f"Val Query Loader:  {len(val_query_paths):>5} samples from {len(val_classes)} classes (Original)")
-    print(f"Test Query Loader: {len(test_query_paths):>5} samples from {len(test_classes)} classes (Original)")
+        shuffled_classes = np.random.permutation(self.classes)
+        self.classes = shuffled_classes
     
-    # 7. Return all the file lists
-    data_splits = {
-        "train": (train_paths, train_labels),
-        "gallery": (gallery_paths, gallery_labels),
-        "val_query": (val_query_paths, val_query_labels),
-        "test_query": (test_query_paths, test_query_labels)
-    }
+
+    def _get_classes_splits(self, classes: set, train_ratio: int, val_ratio: int) -> Tuple[set, set, set]:
+        num_train = int(self.num_classes * train_ratio)
+        num_val = int(self.num_classes * val_ratio)
+        
+        # Ensure at least 1 class in each split if ratios are small
+        num_train = max(1, num_train)
+        num_val = max(1, num_val)
+        train_classes = set(classes[:num_train])
+        val_classes = set(classes[num_train : num_train + num_val])
+        test_classes = set(classes[num_train + num_val:])
+        
+        print(f"Splitting classes: {len(train_classes)} Train / {len(val_classes)} Val / {len(test_classes)} Test\n")
+
+        return train_classes, val_classes, test_classes
     
-    return data_splits
+
+    def _create_dataset_splits(
+        self,
+        train_classes: set,
+        val_classes: set,
+        test_classes: set,
+        k_query: int,
+    ):
+        """
+        Creates train, gallery, and query splits based on class-level separation.
+        """
+
+        random.seed(self.random_seed)
+        np.random.seed(self.random_seed)
+
+        
+        train_paths, train_labels = [], []
+        gallery_paths, gallery_labels = [], []
+        val_query_paths, val_query_labels = [], []
+        test_query_paths, test_query_labels = [], []
+
+
+        print("Processing Train classes...")
+        for class_name in train_classes:
+            
+            aug_class_dir = self.augmented_data_path / class_name
+            aug_images = [str(p) for p in aug_class_dir.glob('*.*')]
+            train_paths.extend(aug_images)
+            train_labels.extend([int(class_name)] * len(aug_images))
+            
+            orig_class_dir = self.original_data_path / class_name
+            orig_images = [str(p) for p in orig_class_dir.glob('*.*')]
+            gallery_paths.extend(orig_images)
+            gallery_labels.extend([int(class_name)] * len(orig_images))
+
+        
+        print("Processing Validation classes...")
+        for class_name in val_classes:
+            orig_class_dir = self.original_data_path / class_name
+            all_class_images = [str(p) for p in orig_class_dir.glob('*.*')]
+            random.shuffle(all_class_images)
+            
+            val_query_paths.extend(all_class_images[:k_query])
+            val_query_labels.extend([int(class_name)] * k_query)
+            
+            gallery_paths.extend(all_class_images[k_query:])
+            gallery_labels.extend([int(class_name)] * (len(all_class_images) - k_query))
+
+        
+        print("Processing Test classes...")
+        for class_name in test_classes:
+            orig_class_dir = self.original_data_path / class_name
+            all_class_images = [str(p) for p in orig_class_dir.glob('*.*')]
+            random.shuffle(all_class_images)
+            
+            test_query_paths.extend(all_class_images[:k_query])
+            test_query_labels.extend([int(class_name)] * k_query)
+            
+            gallery_paths.extend(all_class_images[k_query:])
+            gallery_labels.extend([int(class_name)] * (len(all_class_images) - k_query))
+
+        print("\n--- Data Split Summary ---")
+        print(f"Training Loader:   {len(train_paths):>5} samples from {len(train_classes)} classes (Augmented)")
+        print(f"Gallery Loader:    {len(gallery_paths):>5} samples from {self.num_classes} classes (Original)")
+        print(f"Val Query Loader:  {len(val_query_paths):>5} samples from {len(val_classes)} classes (Original)")
+        print(f"Test Query Loader: {len(test_query_paths):>5} samples from {len(test_classes)} classes (Original)")
+        
+
+        data_splits = {
+            "train": (train_paths, train_labels),
+            "gallery": (gallery_paths, gallery_labels),
+            "val_query": (val_query_paths, val_query_labels),
+            "test_query": (test_query_paths, test_query_labels)
+        }
+
+        return data_splits
+
+
+    def _get_tvt_splits(self, train_ratio, val_ratio):
+        num_train = int(self.num_classes * train_ratio)
+        num_val = int(self.num_classes * val_ratio)
+        
+        # Ensure at least 1 class in each split if ratios are small
+        num_train = max(1, num_train)
+        num_val = max(1, num_val)
+        train_classes = set(self.classes[:num_train])
+        val_classes = set(self.classes[num_train : num_train + num_val])
+        test_classes = set(self.classes[num_train + num_val:])
+
+        return train_classes, val_classes, test_classes
+
+
+    def _get_k_fold_splits(self, split_num: int, val_ratio: float) -> Tuple[set, set, set]:
+        val_start_idx = int(split_num * val_ratio * self.num_classes)
+        val_stop_idx = int((split_num+1) * val_ratio * self.num_classes)
+        val_classes = set(self.classes[val_start_idx:val_stop_idx])
+        train_classes = set(self.classes).difference(val_classes)
+
+        return train_classes, val_classes
+
+
+    def get_k_folds(self,
+                    k: int,
+                    n_query: int=1):
+        folds = []
+        val_ratio = 1/k
+        for split_num in range(k):
+            print(f"================ PROCESSING SPLIT {split_num} ================")
+            train_split, val_split = self._get_k_fold_splits(split_num, val_ratio)
+            fold = self._create_dataset_splits(train_split, val_split, set(), n_query)
+            fold.pop("test_query")
+            folds.append(fold)
+            print("\n")
+        
+        return folds
+
+
+    def train_val_test_split(self, train_ratio: float, val_ratio: float, n_query: int):
+        train_classes, val_classes, test_classes = self._get_tvt_splits(train_ratio, val_ratio)
+        splits = self._create_dataset_splits(train_classes, val_classes, test_classes, n_query)
+
+        return splits
+
 
 
 class ImageCollectionDataset(ABC):
@@ -196,23 +276,9 @@ class PKSampler(Sampler):
     def __init__(self, dataset, P, K):
         self.P = P  # classes per batch
         self.K = K  # images per class
-
-        if hasattr(dataset, "indices"):
-            # dataset is a Subset
-            self.subset_indices = dataset.indices  # indices in the original dataset
-            self.dataset = dataset.dataset         # the original dataset
-            # Build class_to_indices for the subset (values are indices in the subset, not the original dataset)
-            self.class_to_indices = {}
-            for cls, orig_indices in self.dataset.class_to_indices.items():
-                # Find which indices are in the subset
-                subset_class_indices = [i for i, idx in enumerate(self.subset_indices) if idx in orig_indices]
-                if subset_class_indices:
-                    self.class_to_indices[cls] = subset_class_indices
-            self.classes = list(self.class_to_indices.keys())
-        else:
-            self.dataset = dataset
-            self.class_to_indices = self.dataset.class_to_indices
-            self.classes = list(self.class_to_indices.keys())
+        self.dataset = dataset
+        self.class_to_indices = self.dataset.class_to_indices
+        self.classes = list(self.class_to_indices.keys())
 
     def __iter__(self):
         for _ in range(len(self)):
