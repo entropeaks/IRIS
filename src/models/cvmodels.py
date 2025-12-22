@@ -3,7 +3,7 @@ import cv2
 from typing import List, Tuple, Optional
 from tqdm import tqdm
 from src.eval import Metric, Recall, Score
-from src.models.base import BaseModel, DeepModel, timed
+from src.models.base import BaseModel, DeepModel, timed, with_energy_consumption
 from ..feature_stores import InMemoryStore
 from ..distances import FeatureBasedDistance
 from .feature_extractors import FeatureExtractor
@@ -49,9 +49,8 @@ class FeatureBasedEstimator(BaseModel):
         self.weights = weights_array
         
         self.distance_strategy = FeatureBasedDistance(feature_extractors, weights_array)
-        self.gallery_store = None
     
-    
+    @with_energy_consumption
     @timed
     def evaluate(
         self,
@@ -106,6 +105,7 @@ class FeatureBasedEstimator(BaseModel):
         query_features = [fe.get_features(query_path) for fe in self.feature_extractors]
         return query_features
 
+    @with_energy_consumption
     @timed
     def find_nearest_neighbors(self, query_path: str, k: int) -> str:
         """

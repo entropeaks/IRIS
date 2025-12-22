@@ -1,8 +1,9 @@
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Tuple
 from paddleocr import PaddleOCR
 from rapidocr import RapidOCR
 from thefuzz import fuzz
+import numpy as np
 import cv2
 
 class FeatureExtractor(ABC):
@@ -96,3 +97,53 @@ class OrbFeatureExtractor(FeatureExtractor):
         avg_distance = sum(m.distance for m in matches) / len(matches)
 
         return avg_distance
+    
+
+class SIFTFeatureExtractor(FeatureExtractor):
+
+    def __init__(self, min_match_count: int=10):
+        self.sift = cv2.SIFT_create()
+        FLANN_INDEX_KDTREE = 1
+        index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
+        search_params = dict(checks=50)
+        self.flann = cv2.FlannBasedMatcher(index_params, search_params)
+        self.min_match_count = min_match_count
+    
+    def get_features(self, path_to_img: str):
+        img = cv2.imread(path_to_img, cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            return None, None
+        
+        kp, des = self.sift.detectAndCompute(img, None)
+
+        return (kp, des)
+    
+    def compute_distance(self, feat1: Tuple, feat2: Tuple) -> int: 
+        kp1, des1 = feat1
+        kp2, des2 = feat2
+
+        if des1 is None or des2 is None or len(des1) < 2 or len(des2) < 2:
+            return 1.0
+
+        matches = self.flann.knnMatch(des1, des2, k=2)
+
+        good_matches = []
+        for m, n in matches:
+            if m.distance < 0.7*n.distance:
+                good_matches.append(m)
+
+        if len(good_matches) > self.min_match_count:
+            src_pts = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1,1,2)
+            dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1,1,2)
+
+            mask: np.ndarray
+            _, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+            
+            if mask is None:
+                return 1.0
+            
+            inliers_count = np.sum(mask)
+            
+            return 1.0 / (inliers_count + 1)
+
+        return 1.0

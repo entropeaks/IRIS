@@ -20,6 +20,7 @@ from src.eval import Metric, Recall
 
 from src.data import RANDOM_SEED
 
+
 def set_device(device: str) -> torch.device:
     if device == "cuda":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -291,17 +292,20 @@ class ModelReport:
         """ if self.fit_model:
             for model in self.models:
                 if self.models[model].issubclass(DeepModel): """
-        
-        # TODO: add size of index in the report
 
         for model in self.models:
             model_data = {}
             estimator = self.models[model]
             metrics = estimator.evaluate(gallery_dataloader, val_dataloader, metric)
             model_data["evaluation time"] = estimator.time
+            model_data["evaluation_g.eq.co2"] = estimator.carbon
+            model_data["evaluation_kWh"] = estimator.energy
             estimator.find_nearest_neighbors(val_query_paths[0], 3)
             model_data["inference time"] = estimator.time
+            model_data["inference_g.eq.co2"] = estimator.carbon
+            model_data["inference_kWh"] = estimator.energy
             model_data.update(metrics)
+            model_data["store size (mb)"] = estimator.gallery_store.size()
 
             data.append(model_data)
 

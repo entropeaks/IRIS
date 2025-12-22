@@ -40,7 +40,6 @@ class SiameseDino(DeepModel, nn.Module):
         self.to(self.device)
 
         self.distance_strategy = VectorBasedDistance()
-        self.gallery_store = None
         self.gallery_labels = None
 
 

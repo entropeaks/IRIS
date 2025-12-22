@@ -1,25 +1,27 @@
 from abc import ABC, abstractmethod
-from ..eval import Container, Metric, Score
+from ..eval import Metric, Score
 from ..config import Config
+from ..feature_stores import FeatureStore
 from torch.utils.data import DataLoader
 from transformers import AutoModel, AutoProcessor
 import torch
 import time
 import uuid
 import random
-import pyRAPL
+from codecarbon import EmissionsTracker
 from typing import Optional, List
+from functools import wraps
 
-#TODO add the time and energy consumption to some sort of report
 
 def timed(func):
+    @wraps(func)
     def wrapper(self, *args, **kwargs):
         if self._time_it:
             t1 = time.time()
             result = func(self, *args, **kwargs)
             t2 = time.time()
             elapsed = t2-t1
-            print(f"Elapsed time = {elapsed:.2f}s")
+            print(f"Elapsed time for {func.__name__} = {elapsed:.2f}s")
             self.update_time((elapsed))
         else:
             result = func(self, *args, **kwargs)
@@ -28,18 +30,27 @@ def timed(func):
 
     return wrapper
 
-#TODO add GPU consumption
+
 def with_energy_consumption(func):
+    @wraps(func)
     def wrapper(self, *args, **kwargs):
-        pyRAPL.setup()
         if self._evaluate_energy_consumption:
-            m = pyRAPL.Measurement("measure")
-            m.begin()
-            result = func(self, *args, **kwargs)
-            m.end()
-            energy = m.result.pkg * 1e-6
-            print(f"Energy consumption = {energy:.6f} J")
-            self.update_energy(energy)
+            try:
+                tracker = EmissionsTracker(log_level="critical", save_to_file=False)
+                tracker.start_task(func.__name__)
+                result = func(self, *args, **kwargs)
+                tracker_results = tracker.stop_task(func.__name__)
+                energy = tracker_results.energy_consumed
+                carbon_footprint = tracker_results.emissions
+                print(f"Energy consumption for {func.__name__} = {energy:.6f} kWh")
+                print(f"Carbon footprint for {func.__name__} = {carbon_footprint:.6f} g.eq.CO2")
+                self.update_carbon(carbon_footprint)
+                self.update_energy(energy)
+            except Exception as err:
+                print(f"Energy consumption unreadable: {err}")
+                result = func(self, *args, **kwargs)
+            finally:
+                _ = tracker.stop()
         else:
             result = func(self, *args, **kwargs)
         
@@ -65,9 +76,13 @@ class BaseModel(ABC):
         self._evaluate_energy_consumption = evaluate_energy_consumption
         self.time = None
         self.energy = None
+        self.carbon = None
         self.total_time = 0
         self.total_energy = 0
+        self.total_carbon = 0
+
         self._gallery_prepared = False
+        self.gallery_store: FeatureStore = None
 
     def update_time(self, time: int):
         self.time = time
@@ -76,6 +91,10 @@ class BaseModel(ABC):
     def update_energy(self, energy: float):
         self.energy = energy
         self.total_energy += energy
+
+    def update_carbon(self, carbon: float):
+        self.carbon = carbon
+        self.total_carbon += carbon
 
     @abstractmethod
     def evaluate(self, metric: Metric) -> Score:

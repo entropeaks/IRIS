@@ -124,6 +124,6 @@ class FeatureBasedDistance(DistanceStrategy):
         max_vals = dists.max(axis=1, keepdims=True)
         min_vals = dists.min(axis=1, keepdims=True)
         dist_range = max_vals - min_vals
-        dist_range = np.where(max_vals > 0, max_vals, 1.0)
+        dist_range = np.where(dist_range > 0, dist_range, 1.0)
 
         return (dists - min_vals) / dist_range
