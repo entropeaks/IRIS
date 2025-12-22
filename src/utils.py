@@ -293,7 +293,8 @@ class ModelReport:
             for model in self.models:
                 if self.models[model].issubclass(DeepModel): """
 
-        for model in self.models:
+        for i, model in enumerate(self.models):
+            print(f"------------------- MODEL {i} ---------------------")
             model_data = {}
             estimator = self.models[model]
             metrics = estimator.evaluate(gallery_dataloader, val_dataloader, metric)
@@ -308,6 +309,8 @@ class ModelReport:
             model_data["store size (mb)"] = estimator.gallery_store.size()
 
             data.append(model_data)
+
+            print("--------------------------------------------------")
 
         df = pd.DataFrame(data, index=list(self.models.keys()))
 
