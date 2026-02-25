@@ -19,6 +19,44 @@ class FeatureExtractor(ABC):
     def compute_distance(self, desc1, desc2) -> float:
         pass
 
+    @abstractmethod
+    def fit(self, feature_list: List) -> None:
+        pass
+
+class CompactSparseOccurenceMatrix():
+
+    def __init__(self):
+        self._rows = []
+        self._cols = []
+        self._n_entries = 0
+        self._data = []
+        self._vocabulary = {}
+
+    def add(self, entry: List):
+        for word in entry:
+            self._add_to_vocab(word)
+            self._rows.append(self._n_entries)
+            self._cols.append(self._vocabulary[word])
+            self._data = 1 #here occurrence is not frequency but binary
+            self._n_entries += 1
+
+    def _add_to_vocab(self, word: str):
+        if word not in self._vocabulary:
+            self._vocabulary[word] = len(self._vocabulary)
+
+    def search(self, ):
+        pass
+
+
+class OCRExtractor(FeatureExtractor):
+    
+    def __init__(self):
+        self._trainable = True
+        self._occurence_matrix = CompactSparseOccurenceMatrix()
+    
+    def compute_distance_batch(self,):
+        pass
+
 class PaddleTextExtractor(FeatureExtractor):
 
     def __init__(self):
@@ -47,7 +85,7 @@ class PaddleTextExtractor(FeatureExtractor):
 
         return 1/(1+(total/count)) if count != 0 else 1
     
-class RapidTextExtractor(FeatureExtractor):
+class RapidTextExtractor(OCRExtractor):
 
     def __init__(self):
         self.ocr = RapidOCR(params={"Global.log_level": "critical"})

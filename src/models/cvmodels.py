@@ -98,6 +98,7 @@ class FeatureBasedEstimator(BaseModel):
         features = self._compute_features_from_paths(images_paths)
         self.gallery_store.bulk_add(zip(images_paths, features))
         self._gallery_prepared = True
+        self._fit_extractors(features)
         print(f"✅ Gallery prepared: {len(self.gallery_store)} images")
     
     @timed
@@ -142,3 +143,8 @@ class FeatureBasedEstimator(BaseModel):
             img_features = [fe.get_features(path) for fe in self.feature_extractors]
             features.append(img_features)
         return features
+    
+
+    def _fit_extractors(self, feature_list: List):
+        for feature_index, fe in enumerate(self.feature_extractors):
+            fe.fit(feature_list[feature_index])
