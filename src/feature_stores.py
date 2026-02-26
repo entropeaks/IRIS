@@ -1,11 +1,13 @@
 from abc import ABC, abstractmethod
-from typing import List, Tuple, Any, Optional
+from typing import Tuple, Any, Optional, TypeAlias
 import numpy as np
 import sys
 from .distances import DistanceStrategy
 from itertools import chain
 from collections import deque
 from sys import getsizeof, stderr
+
+Feature: TypeAlias = int | float | list[Any]
 
 
 def total_size(o, handlers={}, verbose=False):
@@ -61,15 +63,15 @@ class FeatureStore(ABC):
         pass
     
     @abstractmethod
-    def bulk_add(self, items: List[Tuple[str, np.ndarray, dict]]):
+    def bulk_add(self, items: list[Tuple[str, np.ndarray, dict]]):
         """Ajoute plusieurs images en batch (plus efficace)."""
         pass
     
     @abstractmethod
-    def search(self, query_features: np.ndarray, k: int = 5) -> List[Tuple[str, float]]:
+    def search(self, query_features: np.ndarray, k: int = 5) -> list[Tuple[str, float]]:
         """
         Cherche les k images les plus proches.
-        Returns: List[(image_id, distance)]
+        Returns: list[(image_id, distance)]
         """
         pass
     
@@ -93,12 +95,13 @@ class InMemoryStore(FeatureStore):
 
     def __init__(self,
                  distance_strategy: DistanceStrategy):
-        self._features = {}
+        self._features_by_id = {}
+        self._features_blocks = []
         self._index = []
         self._distance_strategy = distance_strategy
         
     def add(self, image_id, features):
-        self._features[image_id] = features
+        self._features_by_id[image_id] = features
         self._index.append(image_id)
 
     def bulk_add(self, items):
@@ -111,23 +114,43 @@ class InMemoryStore(FeatureStore):
         return np.array(self._index)[indices]
 
     def get_feature_gallery(self):
-        feature_gallery = [self._features[k] for k in self._index]
+        feature_gallery = [self._features_by_id[k] for k in self._index]
         return feature_gallery
     
     def get_paths_gallery(self):
         return self._index.copy()
     
     def get(self, image_id):
-        if not image_id in self._features:
+        if not image_id in self._features_by_id:
             raise KeyError("Image not in the database. Please use add method first.")
-        return self._features[image_id]
+        return self._features_by_id[image_id]
     
     def size(self):
-        return total_size(self._features)
+        return total_size(self._features_by_id)
     
     def clear(self):
-        self._features = {}
+        self._features_by_id = {}
         self._index = []
     
     def __len__(self):
         return len(self._index)
+    
+
+class Index(ABC):
+
+    @abstractmethod
+    def build(self, gallery_features: list[Feature]) -> None:
+        pass
+
+    @abstractmethod
+    def search(self, query_features: list[Feature]) -> list[int]:
+        pass
+
+class IndexManager():
+
+    def __init__(self):
+        self._index = []
+
+    def build_index(self, samples_features: list[Feature]):
+        mdelaheho = 1
+        pass

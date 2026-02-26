@@ -17,7 +17,7 @@ outputs/
 __pycache__/
 *.py[cod]
 *.so
-.env
+.env*
 .venv/
 env/
 venv/

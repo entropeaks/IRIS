@@ -79,12 +79,12 @@ class FeatureBasedDistance(DistanceStrategy):
         self, 
         query_features: Any, 
         stored_features: Any
-    ) -> float:
+    ) -> np.ndarray:
         
         feature_dists = np.zeros((1, len(stored_features), self._n_features), dtype=np.float32)
         for i in range(len(stored_features)):
             for j in range(self._n_features):
-                feature_dists[0, i, j] = self._feature_extractors[j].compute_distance(
+                feature_dists[0, i, j] = self._feature_extractors[j].compute_distances(
                     query_features[j],
                     stored_features[i][j]
                 )
@@ -100,22 +100,25 @@ class FeatureBasedDistance(DistanceStrategy):
         query_features: Any,
         stored_features_batch: List[Any]
     ) -> np.ndarray:
-        n_q = len(query_features)
-        n_g = len(stored_features_batch)
         
-        feature_dists = np.zeros((n_q, n_g, self._n_features), dtype=np.float32)
+        feature_dists = []
+        print(len(stored_features_batch))
         
-        for i in range(n_q):
-            for j in range(n_g):
-                for k in range(self._n_features):
-                    feature_dists[i, j, k] = self._feature_extractors[k].compute_distance(
-                        query_features[i][k],
-                        stored_features_batch[j][k]
-                    )
+        for k in range(self._n_features):
+            dists = self._feature_extractors[k].compute_distances_batch(
+                [sample[k] for sample in query_features],
+                None
+                )
+            print(dists.shape)
+            feature_dists.append(dists)
 
-        normalized_dists = self._normalize_distances_minmax(feature_dists)
+        #normalized_dists = self._normalize_distances_minmax(feature_dists)
 
-        final_dists = np.einsum('ijk,k->ij', normalized_dists, self._weights)
+        normalized_dists = np.array(feature_dists)
+        print(normalized_dists)
+
+        final_dists = np.einsum('ijk,i->jk', normalized_dists, self._weights)
+        print(final_dists)
 
         return final_dists
     

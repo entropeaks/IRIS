@@ -13,7 +13,7 @@ import pandas as pd
 import yaml
 import numpy as np
 
-from src.data import DataPreparator, CachedCollection, make_transform
+from src.data import DataPreparator, CachedCollection, LazyLoadCollection, make_transform
 from src.models.base import BaseModel, DeepModel
 from src.eval import Metric, Recall
 
@@ -276,6 +276,8 @@ class ModelReport:
         gallery_paths, gallery_labels = data_splits["gallery"]
         val_query_paths, val_query_labels = data_splits["val_query"]
         test_query_paths, test_query_labels = data_splits["test_query"]
+        print(gallery_paths)
+        print(val_query_paths)
 
         browser = Browser(ORIGINAL_DATA_PATH)
         gallery_paths, gallery_labels, query_paths, query_labels = browser.sample_leave_k_out(1)
@@ -283,10 +285,10 @@ class ModelReport:
         RESIZE_SIZE = 224
         
         print("Loading dataloaders...")
-        gallery_dataset = CachedCollection(gallery_paths, gallery_labels, transform=make_transform(RESIZE_SIZE))
+        gallery_dataset = LazyLoadCollection(gallery_paths, gallery_labels, transform=make_transform(RESIZE_SIZE))
         gallery_dataloader = DataLoader(gallery_dataset, batch_size=32)
 
-        val_dataset = CachedCollection(query_paths, query_labels, transform=make_transform(RESIZE_SIZE))
+        val_dataset = LazyLoadCollection(query_paths, query_labels, transform=make_transform(RESIZE_SIZE))
         val_dataloader = DataLoader(val_dataset, batch_size=32)
 
         """ if self.fit_model:
@@ -298,6 +300,7 @@ class ModelReport:
             model_data = {}
             estimator = self.models[model]
             metrics = estimator.evaluate(gallery_dataloader, val_dataloader, metric)
+            print(metrics)
             model_data["evaluation time"] = estimator.time
             model_data["evaluation_g.eq.co2"] = estimator.carbon
             model_data["evaluation_kWh"] = estimator.energy
