@@ -1,8 +1,10 @@
 import numpy as np
 from abc import ABC, abstractmethod
 from typing import Any, List, Optional
-from .models.feature_extractors import FeatureExtractor
+from .feature_stores import IndexManager
 import torch
+from scipy.sparse import csr_matrix
+
 
 class DistanceStrategy(ABC):
     """
@@ -58,22 +60,40 @@ class VectorBasedDistance(DistanceStrategy):
         return dists
 
 
+class DistanceKernel(ABC):
+    
+    @abstractmethod
+    def compute(self, primitives: list) -> np.ndarray:
+        pass
+
+class BinaryJaccardKernel(DistanceKernel):
+
+    def __init__(self):
+        pass
+
+    def compute(self, primitives: list[csr_matrix]):
+        intersections, gallery_sum, query_sum = primitives
+        unions = query_sum[:, None] + gallery_sum[None, :] - intersections
+        return (intersections / unions).toarray()
+
+
 class FeatureBasedDistance(DistanceStrategy):
 
-    def __init__(self, feature_extractors: List[FeatureExtractor], weights: np.ndarray[float]):
+    def __init__(self, kernels: list[DistanceKernel], weights: np.ndarray[float]):
 
-        if len(feature_extractors) != len(weights):
+        # Validation des paramètres
+        if len(kernels) != len(weights):
             raise ValueError(
-                f"Mismatch: {len(feature_extractors)} extractors but {len(weights)} weights"
+                f"Mismatch: {len(kernels)} distance kernels but {len(weights)} weights"
             )
         
-        if not np.isclose(weights.sum(), 1.0):
-            raise ValueError(f"Weights must sum to 1.0, got {weights.sum()}")
+        weights_array = np.array(weights, dtype=np.float32)
+        if not np.isclose(weights_array.sum(), 1.0):
+            raise ValueError(f"Weights must sum to 1.0, got {weights_array.sum()}")
         
-        self._feature_extractors = feature_extractors
-        self._n_features = len(feature_extractors)
+        self._kernels = kernels
         self._weights = weights
-
+        self._n_features = len(weights)
 
     def compute_distances(
         self, 
@@ -81,41 +101,28 @@ class FeatureBasedDistance(DistanceStrategy):
         stored_features: Any
     ) -> np.ndarray:
         
-        feature_dists = np.zeros((1, len(stored_features), self._n_features), dtype=np.float32)
-        for i in range(len(stored_features)):
-            for j in range(self._n_features):
-                feature_dists[0, i, j] = self._feature_extractors[j].compute_distances(
-                    query_features[j],
-                    stored_features[i][j]
-                )
+        pass
 
-        normalized_dists = self._normalize_distances_minmax(feature_dists)
-        final_dists = np.einsum('ijk,k->ij', normalized_dists, self._weights)
-
-        return final_dists[0]
-    
     
     def compute_distances_batch(
         self,
-        query_features: Any,
-        stored_features_batch: List[Any]
+        index_manager: IndexManager,
+        query_features: Any
     ) -> np.ndarray:
         
         feature_dists = []
-        print(len(stored_features_batch))
         
         for k in range(self._n_features):
-            dists = self._feature_extractors[k].compute_distances_batch(
-                [sample[k] for sample in query_features],
-                None
-                )
-            print(dists.shape)
+            index = index_manager.get_index(k)
+            dist_strategy = self._kernels[k]
+            encoded_query = index.encode(query_features[k])
+            primitives = index.compute_primitives(encoded_query)
+            dists = dist_strategy.compute(primitives)
             feature_dists.append(dists)
 
         #normalized_dists = self._normalize_distances_minmax(feature_dists)
 
         normalized_dists = np.array(feature_dists)
-        print(normalized_dists)
 
         final_dists = np.einsum('ijk,i->jk', normalized_dists, self._weights)
         print(final_dists)

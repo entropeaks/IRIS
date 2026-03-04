@@ -4,7 +4,7 @@ from typing import List, Tuple, Optional
 from tqdm import tqdm
 from src.eval import Metric, Recall, Score
 from src.models.base import BaseModel, DeepModel, timed, with_energy_consumption
-from ..feature_stores import InMemoryStore
+from ..feature_stores import FeatureStore, IndexManager
 from ..distances import FeatureBasedDistance
 from .feature_extractors import FeatureExtractor
 import numpy as np
@@ -21,7 +21,9 @@ class FeatureBasedEstimator(BaseModel):
     def __init__(
         self,
         feature_extractors: List['FeatureExtractor'],
-        weights: List[float],
+        gallery_store: FeatureStore,
+        index_manager: IndexManager,
+        distance_strategy: FeatureBasedDistance,
         time_it: bool = True,
         evaluate_energy_consumption: bool = True
     ):
@@ -35,20 +37,10 @@ class FeatureBasedEstimator(BaseModel):
 
         super().__init__(time_it, evaluate_energy_consumption)
 
-        # Validation des paramètres
-        if len(feature_extractors) != len(weights):
-            raise ValueError(
-                f"Mismatch: {len(feature_extractors)} extractors but {len(weights)} weights"
-            )
-        
-        weights_array = np.array(weights, dtype=np.float32)
-        if not np.isclose(weights_array.sum(), 1.0):
-            raise ValueError(f"Weights must sum to 1.0, got {weights_array.sum()}")
-        
         self.feature_extractors = feature_extractors
-        self.weights = weights_array
-        
-        self.distance_strategy = FeatureBasedDistance(feature_extractors, weights_array)
+        self.gallery_store = gallery_store
+        self._index_manager = index_manager
+        self.distance_strategy = distance_strategy
     
     @with_energy_consumption
     @timed
@@ -75,10 +67,11 @@ class FeatureBasedEstimator(BaseModel):
 
         query_paths = self._extract_paths_from_dataloader(query_dataloader)
         print("Computing queries features...")
-        query_features = self._compute_features_from_paths(query_paths)
+        query_features = self._compute_features_blocks_from_paths(query_paths)
         
         distances = self.distance_strategy.compute_distances_batch(
-            query_features, self.gallery_store.get_feature_gallery()
+            self._index_manager,
+            query_features
         )
         
         query_labels = torch.tensor(query_dataloader.dataset.labels)
@@ -92,14 +85,13 @@ class FeatureBasedEstimator(BaseModel):
     
     
     def prepare_gallery(self, gallery_dataloader: DataLoader):
-        self.gallery_store = InMemoryStore(self.distance_strategy)
         print("🔨 Preparing gallery (computing features)...")
         images_paths = self._extract_paths_from_dataloader(gallery_dataloader)
         features = self._compute_features_from_paths(images_paths)
-        print(features)
         self.gallery_store.bulk_add(zip(images_paths, features))
+        features_blocks = self.gallery_store.get_features_blocks()
+        self._index_manager.build(features_blocks)
         self._gallery_prepared = True
-        self._fit_extractors(features)
         print(f"✅ Gallery prepared: {len(self.gallery_store)} images")
     
     @timed
@@ -145,7 +137,17 @@ class FeatureBasedEstimator(BaseModel):
             features.append(img_features)
         return features
     
+    def _compute_features_blocks_from_paths(self, paths: list[str]) -> list[list[np.ndarray]]:
+        features_blocks = []
+        for fe in tqdm(self.feature_extractors, desc="Computing features blocks"):
+            block = []
+            for path in paths:
+                block.append(fe.get_features(path))
 
-    def _fit_extractors(self, feature_list: List):
+            features_blocks.append(block)
+        
+        return features_blocks
+
+    """ def _fit_extractors(self, feature_list: List):
         for feature_index, fe in enumerate(self.feature_extractors):
-            fe.fit([entry_features[feature_index] for entry_features in feature_list])
+            fe.fit([entry_features[feature_index] for entry_features in feature_list]) """
