@@ -124,3 +124,97 @@ class SIFTFeatureExtractor(FeatureExtractor):
             return 1.0 / (inliers_count + 1)
 
         return 1.0
+
+
+class HSVExtractor(FeatureExtractor):
+
+    def __init__(self, method=cv2.HISTCMP_BHATTACHARYYA):
+        self.trainable = False
+        self._method = method
+
+    def _apply_gray_world(self, rgb_img):
+        """
+        Applique l'algorithme Gray World pour annuler la dominante de couleur de l'éclairage.
+        Utilise des opérations matricielles pour l'optimisation des performances.
+        """
+        # Conversion en float32 pour éviter les dépassements (overflow) lors des calculs
+        r, g, b = cv2.split(rgb_img.astype(np.float32))
+        
+        avg_r = np.mean(r)
+        avg_g = np.mean(g)
+        avg_b = np.mean(b)
+        
+        # Sécurité pour éviter la division par zéro sur une image totalement noire
+        if avg_r == 0 or avg_g == 0 or avg_b == 0:
+            return rgb_img
+            
+        avg_gray = (avg_r + avg_g + avg_b) / 3.0
+        
+        # Application des facteurs d'échelle d'illumination et bornage [0, 255]
+        r = np.clip(r * (avg_gray / avg_r), 0, 255)
+        g = np.clip(g * (avg_gray / avg_g), 0, 255)
+        b = np.clip(b * (avg_gray / avg_b), 0, 255)
+        
+        result = cv2.merge([r, g, b])
+        return result.astype(np.uint8)
+
+    def _create_dynamic_mask(self, hsv_img):
+        """
+        Génère un masque binaire dynamique excluant les reflets spéculaires et les ombres.
+        """
+        h, s, v = cv2.split(hsv_img)
+        
+        # Identification dynamique de la luminance maximale de l'image courante
+        v_max = np.max(v)
+        
+        # 1. Masque des reflets : Très lumineux (> 90% du max local) ET peu saturé (< 30)
+        # Les opérations bitwise d'OpenCV sont écrites en C, idéales pour la scalabilité
+        highlight_mask = cv2.bitwise_and(
+            (v > 0.9 * v_max).astype(np.uint8),
+            (s < 30).astype(np.uint8)
+        ) * 255
+        
+        # 2. Masque des ombres : Valeur de luminosité extrêmement faible (bruit capteur)
+        shadow_mask = (v < 20).astype(np.uint8) * 255
+        
+        # 3. Masque final : On garde les pixels qui ne sont NI des reflets, NI des ombres
+        bad_pixels = cv2.bitwise_or(highlight_mask, shadow_mask)
+        valid_mask = cv2.bitwise_not(bad_pixels)
+        
+        return valid_mask
+
+    def calculate_hsv_distance_pil(self, pil_img1, pil_img2):
+        """
+        Calcule la distance entre les histogrammes HSV de deux objets PIL Image.
+        Robuste aux variations d'éclairage et aux réflectances des matériaux.
+        """
+        
+        # 1. Conversion PIL -> NumPy (Format RGB)
+        img1_np = np.array(pil_img1)
+        img2_np = np.array(pil_img2)
+
+        # 2. Correction de l'Illuminant (Color Constancy)
+        img1_gw = self._apply_gray_world(img1_np)
+        img2_gw = self._apply_gray_world(img2_np)
+
+        # 3. Conversion vers l'espace HSV
+        hsv1 = cv2.cvtColor(img1_gw, cv2.COLOR_RGB2HSV)
+        hsv2 = cv2.cvtColor(img2_gw, cv2.COLOR_RGB2HSV)
+
+        # 4. Création des masques dynamiques
+        mask1 = self._create_dynamic_mask(hsv1)
+        mask2 = self._create_dynamic_mask(hsv2)
+
+        # 5. Calcul des histogrammes 2D (H et S) en appliquant les masques
+        hist_size = [50, 60]
+        ranges = [0, 180, 0, 256]
+
+        hist1 = cv2.calcHist([hsv1], [0, 1], mask1, hist_size, ranges)
+        hist2 = cv2.calcHist([hsv2], [0, 1], mask2, hist_size, ranges)
+        
+        # 6. Normalisation globale (indispensable puisque le masque modifie le nombre de pixels)
+        cv2.normalize(hist1, hist1, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+        cv2.normalize(hist2, hist2, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+
+        # 7. Calcul de la distance
+        return cv2.compareHist(hist1, hist2, self._method)
