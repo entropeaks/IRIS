@@ -1,0 +1,29 @@
+model:
+  backbone_name: facebook/dinov3-vitb16-pretrain-lvd1689m
+  hidden_dim: 512
+  output_dim: 128
+  normalize: true
+  dropout: 0
+train:
+  epochs: 200
+  head_lr: 5.0e-05
+  backbone_lr: 5.0e-06
+  weight_decay: 0.0001
+  margin: 0.6
+  sampler_P: 16
+  sampler_K: 4
+eval:
+  recall_k:
+  - 1
+  - 3
+  - 10
+  k_query: 1
+  val_size: 0.2
+  test_size: 0.1
+dataset:
+  original_dataset_path: data/original_data
+  augmented_dataset_path: data/augmented_data16
+base:
+  wandb_project_name: DIHT
+  wandb_entity: entropeaks-universit-paul-sabatier-toulouse-iii
+  device: cuda

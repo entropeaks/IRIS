@@ -1,0 +1,14 @@
+defaults:
+  - model: model
+  - train: train
+  - eval: eval
+  - dataset: dataset
+  - _self_
+
+base:
+  wandb_project_name: "DIHT"
+  wandb_entity: "entropeaks-universit-paul-sabatier-toulouse-iii"
+
+  device: "cuda"
+
+  model_checkpoints_path: "model_checkpoints"
