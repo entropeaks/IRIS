@@ -13,6 +13,12 @@ import numpy as np
 from tqdm import tqdm
 from typing import List
 from PIL import Image
+from wandb import Run
+
+class MockRun:
+    def __getattr__(self, name):
+        # Retourne une fonction qui ne fait rien pour n'importe quel nom de méthode
+        return lambda *args, **kwargs: None
 
 
 class SiameseDino(DeepModel, nn.Module):
@@ -20,6 +26,7 @@ class SiameseDino(DeepModel, nn.Module):
                  backbone: AutoModel,
                  processor: AutoProcessor,
                  config: Config,
+                 run: Run=None,
                  time_it: bool=True,
                  evaluate_energy_consumption: bool=True
                  ):
@@ -41,11 +48,14 @@ class SiameseDino(DeepModel, nn.Module):
 
         self.distance_strategy = VectorBasedDistance()
         self.gallery_labels = None
+        self.run = run or MockRun()
 
 
     def set_optimizer(self, optimizer: torch.optim.Optimizer):
         self.optimizer = optimizer
 
+    def set_run(self, run: Run):
+        self.run = run
 
     def forward(self, **inputs):
         outputs = self.backbone(**inputs)
@@ -98,8 +108,12 @@ class SiameseDino(DeepModel, nn.Module):
         best_score = 0.0
         best_metrics = {}
         for epoch in tqdm(range(self.config.train.epochs)):
-            self._fit_one_epoch(train_dataloader)
+            train_metrics = self._fit_one_epoch(train_dataloader)
             metrics = self._evaluate_new_iteration(gallery_dataloader, query_dataloader, metric)
+            
+            train_metrics.update(metrics)
+            self.run.log(train_metrics)
+
             if self._model_improvement(metrics, best_score):
                 best_metrics = metrics
                 best_score = np.mean([score for score in best_metrics.values()])
@@ -108,7 +122,7 @@ class SiameseDino(DeepModel, nn.Module):
         return best_metrics
 
 
-    def _fit_one_epoch(self, train_dataloader: DataLoader) -> None:
+    def _fit_one_epoch(self, train_dataloader: DataLoader) -> dict:
         self.train()
         cumulative_loss = 0.0
         cumulative_pos_dist = 0.0
@@ -139,6 +153,11 @@ class SiameseDino(DeepModel, nn.Module):
         cumulative_loss /= len(train_dataloader)
         cumulative_pos_dist /= len(train_dataloader)
         cumulative_neg_dist /= len(train_dataloader)
+
+        return {"loss": cumulative_loss,
+                "positive_dist": cumulative_pos_dist,
+                "negative_dist": cumulative_neg_dist,
+                "triplets_mined": cumulative_triplets_count}
 
 
     def _mine_semi_hard_triplets_cdist(self, embeddings: torch.Tensor, labels: np.ndarray) -> List[tuple]:

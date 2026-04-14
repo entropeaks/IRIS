@@ -1,2 +1,2 @@
-original_dataset_path: "data/original_data"
-augmented_dataset_path: "data/original_data"
+original_dataset_path: "/home/timothee/MEGA/Datasets/capsules/original_good_orientation"
+augmented_dataset_path: "/home/timothee/MEGA/Datasets/capsules/augmented_good_orientation"

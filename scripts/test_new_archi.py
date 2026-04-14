@@ -77,9 +77,15 @@ def main(config: Config):
     siamese_model.set_optimizer(optimizer)
     _ = siamese_model.to(device)
 
-    metrics = siamese_model.fit_and_evaluate(train_dataloader, gallery_dataloader, val_dataloader, metric)
 
-    print(metrics)
+    run = wandb.init(project=config.base.wandb_project_name, entity=config.base.wandb_entity, config=OmegaConf.to_container(config, resolve=True))
+    siamese_model.set_run(run)
+
+    best_metrics = siamese_model.fit_and_evaluate(train_dataloader, gallery_dataloader, val_dataloader, metric)
+
+    run.finish()
+
+    print(f"best iteration: {best_metrics}")
 
 
 if __name__ == "__main__":
