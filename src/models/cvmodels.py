@@ -4,8 +4,9 @@ from typing import List, Tuple, Optional
 from tqdm import tqdm
 from src.eval import Metric, Recall, Score
 from src.models.base import BaseModel, DeepModel, timed, with_energy_consumption
-from ..feature_stores import FeatureStore, IndexManager
-from ..distances import FeatureBasedDistance
+from ..feature_stores import FeatureStore
+from src.distances.index import IndexManager
+from src.distances.fusion import FeatureBasedFusion
 from .feature_extractors import FeatureExtractor
 import numpy as np
 import torch
@@ -23,7 +24,7 @@ class FeatureBasedEstimator(BaseModel):
         feature_extractors: List['FeatureExtractor'],
         gallery_store: FeatureStore,
         index_manager: IndexManager,
-        distance_strategy: FeatureBasedDistance,
+        distance_strategy: FeatureBasedFusion,
         time_it: bool = True,
         evaluate_energy_consumption: bool = True
     ):

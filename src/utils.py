@@ -145,8 +145,13 @@ class BackgroundTransform(Transform):
         image = ImageOps.exif_transpose(image)
         image = self.instance_transforms(image)
         boxes = self.crop_model.get_cropbox(image)
-        if len(boxes) == 0 or type(boxes[0]) != list:
+        
+        if len(boxes) == 0:
+            return image
+
+        if type(boxes[0]) != list:
             boxes = [boxes]
+        
         mask = self.segmentation_model.get_mask(image, boxes)
         bg = self.background_sampler.sample().resize(image.size)
         bg = self.blur_bg(bg)
@@ -186,7 +191,9 @@ class Browser:
                 yield class_dir
 
     def _construct_filename(self, filename: str, n: int) -> str:
-        base_name, extension = filename.split('.')
+        components = filename.split('.')
+        base_name = '.'.join(components[:-1])
+        extension = components[-1]
         return base_name + f"_{str(n)}." + extension
 
     def generate_transformed_dataset(self,

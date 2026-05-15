@@ -31,8 +31,8 @@ class EvalConfig:
 
 @dataclass
 class DatasetConfig:
-    original_dataset_path: str="data/augmented_data16"
-    augmented_dataset_path: str="data/original_data"
+    original_dataset_path: str="data/original_data"
+    augmented_dataset_path: str="data/augmented_data16"
 
 
 @dataclass

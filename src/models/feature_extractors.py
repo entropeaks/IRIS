@@ -2,6 +2,9 @@ from abc import ABC, abstractmethod
 from typing import List, Tuple
 from paddleocr import PaddleOCR
 from rapidocr import RapidOCR
+import easyocr
+from doctr.io import DocumentFile
+from doctr.models import ocr_predictor
 from thefuzz import fuzz
 import numpy as np
 import cv2
@@ -47,7 +50,58 @@ class RapidTextExtractor(FeatureExtractor):
         words = [word.lower() for string in result.txts for word in string.split(" ")]
         
         return words
+
+class EasyOCRTextExtractor(FeatureExtractor):
+
+    def __init__(self):
+        super().__init__()
+        self.ocr = easyocr.Reader(['fr', 'en', 'nl', 'de'])
+        self.trainable = False
+
+    def get_features(self, path_to_img: str) -> List[str]:
+        result = self.ocr.readtext(path_to_img, detail=0)
+        if result == None:
+            return []
+        
+        words = [word.lower() for string in result for word in string.split(" ")]
+        
+        return words
     
+class DocTRTextExtractor(FeatureExtractor):
+
+    def __init__(self):
+        super().__init__()
+        self.ocr = ocr_predictor(
+            det_arch="db_mobilenet_v3_large",
+            reco_arch="crnn_mobilenet_v3_small",
+            pretrained=True
+        ).cuda().half()
+
+    def get_features(self, image_path: str) -> list[str]:
+        doc = DocumentFile.from_images(image_path)
+        result = self.ocr(doc)
+        
+        return [
+            word.value
+            for page in result.pages
+            for block in page.blocks
+            for line in block.lines
+            for word in line.words
+        ]
+    
+    def get_features_batch(self, image_paths: list[str]) -> list[list[str]]:
+        docs = DocumentFile.from_images(image_paths)  # passe tout en une fois
+        result = self.ocr(docs)
+        
+        return [
+            [
+                word.value
+                for block in page.blocks
+                for line in block.lines
+                for word in line.words
+            ]
+            for page in result.pages
+        ]
 
 
 class OrbFeatureExtractor(FeatureExtractor):
@@ -132,6 +186,24 @@ class HSVExtractor(FeatureExtractor):
         self.trainable = False
         self._method = method
 
+    def get_features(self, path_to_img):
+        img_bgr = cv2.imread(path_to_img)
+        if img_bgr is None:
+            raise ValueError("Path doesn't exist.")
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        img_gw = self._apply_gray_world(img_rgb)
+        img_hsv = cv2.cvtColor(img_gw, cv2.COLOR_RGB2HSV)
+        mask = self._create_dynamic_mask(img_hsv)
+
+        hist_size = [50, 60]
+        ranges = [0, 180, 0, 256]
+        
+        hist = cv2.calcHist([img_hsv], [0, 1], mask, hist_size, ranges)
+        cv2.normalize(hist, hist, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+
+        return hist
+
+
     def _apply_gray_world(self, rgb_img):
         """
         Applique l'algorithme Gray World pour annuler la dominante de couleur de l'éclairage.
@@ -182,39 +254,3 @@ class HSVExtractor(FeatureExtractor):
         valid_mask = cv2.bitwise_not(bad_pixels)
         
         return valid_mask
-
-    def calculate_hsv_distance_pil(self, pil_img1, pil_img2):
-        """
-        Calcule la distance entre les histogrammes HSV de deux objets PIL Image.
-        Robuste aux variations d'éclairage et aux réflectances des matériaux.
-        """
-        
-        # 1. Conversion PIL -> NumPy (Format RGB)
-        img1_np = np.array(pil_img1)
-        img2_np = np.array(pil_img2)
-
-        # 2. Correction de l'Illuminant (Color Constancy)
-        img1_gw = self._apply_gray_world(img1_np)
-        img2_gw = self._apply_gray_world(img2_np)
-
-        # 3. Conversion vers l'espace HSV
-        hsv1 = cv2.cvtColor(img1_gw, cv2.COLOR_RGB2HSV)
-        hsv2 = cv2.cvtColor(img2_gw, cv2.COLOR_RGB2HSV)
-
-        # 4. Création des masques dynamiques
-        mask1 = self._create_dynamic_mask(hsv1)
-        mask2 = self._create_dynamic_mask(hsv2)
-
-        # 5. Calcul des histogrammes 2D (H et S) en appliquant les masques
-        hist_size = [50, 60]
-        ranges = [0, 180, 0, 256]
-
-        hist1 = cv2.calcHist([hsv1], [0, 1], mask1, hist_size, ranges)
-        hist2 = cv2.calcHist([hsv2], [0, 1], mask2, hist_size, ranges)
-        
-        # 6. Normalisation globale (indispensable puisque le masque modifie le nombre de pixels)
-        cv2.normalize(hist1, hist1, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
-        cv2.normalize(hist2, hist2, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
-
-        # 7. Calcul de la distance
-        return cv2.compareHist(hist1, hist2, self._method)
