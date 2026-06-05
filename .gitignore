@@ -11,13 +11,13 @@ notebooks/.ipynb_checkpoints/
 notebooks/draft.ipynb
 wandb/
 model_checkpoints/
-config/base_config.yaml
+config/config.yaml
 outputs/
 
 __pycache__/
 *.py[cod]
 *.so
-.env
+.env*
 .venv/
 env/
 venv/
@@ -26,3 +26,6 @@ venv/
 .idea/
 .vscode/
 archives/
+*/runs/
+
+REVIEW.md

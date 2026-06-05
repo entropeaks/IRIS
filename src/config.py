@@ -1,5 +1,9 @@
 from dataclasses import dataclass, field
-from hydra.core.config_store import ConfigStore
+
+@dataclass
+class ImgResize:
+    height: int=448
+    width: int=448
 
 @dataclass
 class ModelConfig:
@@ -7,7 +11,7 @@ class ModelConfig:
     hidden_dim: int=0
     output_dim: int=128
     normalize: bool=True
-    dropout: int=0
+    dropout: float=0.0
 
 
 @dataclass
@@ -19,6 +23,7 @@ class TrainConfig:
     margin: float=0.5
     sampler_P: int=8
     sampler_K: int=4
+    resize: ImgResize = field(default_factory=ImgResize)
 
 
 @dataclass
@@ -31,14 +36,14 @@ class EvalConfig:
 
 @dataclass
 class DatasetConfig:
-    original_dataset_path: str="data/augmented_data16"
-    augmented_dataset_path: str="data/original_data"
+    original_dataset_path: str="data/original_data"
+    augmented_dataset_path: str="data/augmented_data16"
 
 
 @dataclass
 class BaseConfig:
-    wandb_project_name: str=""
-    wandb_entity: str=""
+    wandb_project_name: str=None
+    wandb_entity: str=None
     device: str="cpu"
     model_checkpoints_path: str="model_checkpoints"
 
@@ -52,5 +57,11 @@ class Config:
     base: BaseConfig = field(default_factory=BaseConfig)
 
 
-cs = ConfigStore.instance()
-cs.store(name="config", node=Config)
+def load_config(path: str = "config/config.yaml") -> Config:
+    import yaml
+    import dacite
+
+    with open(path) as f:
+        raw = yaml.safe_load(f)
+
+    return dacite.from_dict(Config, raw, config=dacite.Config(strict=True))

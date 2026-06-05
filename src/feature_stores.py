@@ -1,11 +1,10 @@
 from abc import ABC, abstractmethod
-from typing import List, Tuple, Any, Optional
+from typing import Tuple, Any, Optional
 import numpy as np
-import sys
-from .distances import DistanceStrategy
 from itertools import chain
 from collections import deque
 from sys import getsizeof, stderr
+from src.types import Feature
 
 
 def total_size(o, handlers={}, verbose=False):
@@ -61,16 +60,16 @@ class FeatureStore(ABC):
         pass
     
     @abstractmethod
-    def bulk_add(self, items: List[Tuple[str, np.ndarray, dict]]):
+    def bulk_add(self, items: list[Tuple[str, np.ndarray, dict]]):
         """Ajoute plusieurs images en batch (plus efficace)."""
         pass
-    
+
     @abstractmethod
-    def search(self, query_features: np.ndarray, k: int = 5) -> List[Tuple[str, float]]:
-        """
-        Cherche les k images les plus proches.
-        Returns: List[(image_id, distance)]
-        """
+    def get_feature_block(self) -> list:
+        pass
+
+    @abstractmethod
+    def get_features_blocks(self) -> list:
         pass
     
     @abstractmethod
@@ -91,43 +90,71 @@ class FeatureStore(ABC):
 
 class InMemoryStore(FeatureStore):
 
-    def __init__(self,
-                 distance_strategy: DistanceStrategy):
-        self._features = {}
+    def __init__(self):
+        self._store = {}
         self._index = []
-        self._distance_strategy = distance_strategy
+        
         
     def add(self, image_id, features):
-        self._features[image_id] = features
-        self._index.append(image_id)
 
-    def bulk_add(self, items):
-        for image_id, features in items:
+        if self._store:
+            expected = len(self._store[next(iter(self._store))])
+            if len(features) != expected:
+                raise ValueError(f"""Expected {expected} features, got {len(features)}.\n
+                Clear the store and start over with the right number of features.""")
+
+        if image_id not in self._store:
+            self._index.append(image_id)
+        #upsert -> features overwritten even if image_id found in the index
+        self._store[image_id] = features
+
+
+    def bulk_add(self, image_ids, items):
+        for i, image_id in enumerate(image_ids):
+            features = [items[j][i] for j in range(len(items))]
             self.add(image_id, features)
 
-    def search(self, query_features, k):
-        dists = self._distance_strategy.compute_distances(query_features, self.get_feature_gallery())
-        indices = np.argsort(dists)[:k]
-        return np.array(self._index)[indices]
 
     def get_feature_gallery(self):
-        feature_gallery = [self._features[k] for k in self._index]
+        feature_gallery = [self._store[k] for k in self._index]
         return feature_gallery
+    
+    
+    def get_feature_block(self, block_id: int) -> list:
+        return [self._store[k][block_id] for k in self._index]
+    
+
+    def get_features_blocks(self) -> list[list]:
+        if len(self._store) == 0:
+            raise LookupError("Empty feature store. Please use add method first.")
+        feature_num = len(self._store[next(iter(self._store))])
+        return [self.get_feature_block(i) for i in range(feature_num)]
+    
     
     def get_paths_gallery(self):
         return self._index.copy()
     
+    
     def get(self, image_id):
-        if not image_id in self._features:
+        if not image_id in self._store:
             raise KeyError("Image not in the database. Please use add method first.")
-        return self._features[image_id]
+        return self._store[image_id]
+    
     
     def size(self):
-        return total_size(self._features)
+        return total_size(self._store)
+    
     
     def clear(self):
-        self._features = {}
+        self._store = {}
         self._index = []
     
+
     def __len__(self):
         return len(self._index)
+    
+
+    def __getitem__(self, idx):
+        if isinstance(idx, list) or isinstance(idx, np.ndarray):
+            return [self._index[i] for i in idx]
+        return self._index[idx]
