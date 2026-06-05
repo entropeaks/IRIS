@@ -94,6 +94,7 @@ class InMemoryStore(FeatureStore):
         self._store = {}
         self._index = []
         
+        
     def add(self, image_id, features):
 
         if self._store:
@@ -107,16 +108,21 @@ class InMemoryStore(FeatureStore):
         #upsert -> features overwritten even if image_id found in the index
         self._store[image_id] = features
 
-    def bulk_add(self, items):
-        for image_id, features in items:
+
+    def bulk_add(self, image_ids, items):
+        for i, image_id in enumerate(image_ids):
+            features = [items[j][i] for j in range(len(items))]
             self.add(image_id, features)
+
 
     def get_feature_gallery(self):
         feature_gallery = [self._store[k] for k in self._index]
         return feature_gallery
     
+    
     def get_feature_block(self, block_id: int) -> list:
         return [self._store[k][block_id] for k in self._index]
+    
 
     def get_features_blocks(self) -> list[list]:
         if len(self._store) == 0:
@@ -124,20 +130,31 @@ class InMemoryStore(FeatureStore):
         feature_num = len(self._store[next(iter(self._store))])
         return [self.get_feature_block(i) for i in range(feature_num)]
     
+    
     def get_paths_gallery(self):
         return self._index.copy()
+    
     
     def get(self, image_id):
         if not image_id in self._store:
             raise KeyError("Image not in the database. Please use add method first.")
         return self._store[image_id]
     
+    
     def size(self):
         return total_size(self._store)
+    
     
     def clear(self):
         self._store = {}
         self._index = []
     
+
     def __len__(self):
         return len(self._index)
+    
+
+    def __getitem__(self, idx):
+        if isinstance(idx, list) or isinstance(idx, np.ndarray):
+            return [self._index[i] for i in idx]
+        return self._index[idx]

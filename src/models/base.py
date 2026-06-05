@@ -153,8 +153,3 @@ class DeepModel(BaseModel):
     @abstractmethod
     def save(self):
         pass
-
-
-class CVModel(BaseModel):
-    def __init__(self):
-        pass

@@ -23,8 +23,7 @@ class MockRun:
 
 class SiameseDino(DeepModel, nn.Module):
     def __init__(self,
-                 backbone: AutoModel,
-                 processor: AutoProcessor,
+                 model_name: str,
                  config: Config,
                  run: Run=None,
                  time_it: bool=True,
@@ -32,10 +31,14 @@ class SiameseDino(DeepModel, nn.Module):
                  ):
         DeepModel.__init__(self, config, time_it, evaluate_energy_consumption)
         nn.Module.__init__(self)
-        self.backbone = backbone
+        self._backbone = AutoModel(model_name)
         self.optimizer = None
-        self.processor = processor
-        embedding_dim = backbone.config.hidden_size
+        self._processor = AutoProcessor(model_name)
+
+        #n_prefix is num_registers + 1 to take all patch tokens without CLS and register tokens
+        self._n_prefix = self._backbone.config.num_register_tokens + 1
+        
+        embedding_dim = self._backbone.config.hidden_size
         self.projection_head = nn.Sequential(
             nn.Linear(embedding_dim, self.config.model.hidden_dim),
             nn.ReLU(),
@@ -46,7 +49,6 @@ class SiameseDino(DeepModel, nn.Module):
         self.device = set_device(config.base.device)
         self.to(self.device)
 
-        self.distance_strategy = VectorBasedDistance()
         self.gallery_labels = None
         self.run = run or MockRun()
 
@@ -57,9 +59,14 @@ class SiameseDino(DeepModel, nn.Module):
     def set_run(self, run: Run):
         self.run = run
 
+    def gem_pooling(self, patch_tokens, p=3):
+        # patch_tokens: (1, N_patches, hidden_size)
+        return patch_tokens.clamp(min=1e-6).pow(p).mean(dim=1).pow(1/p)
+
     def forward(self, **inputs):
-        outputs = self.backbone(**inputs)
-        x = outputs.pooler_output if hasattr(outputs, 'pooler_output') else outputs.last_hidden_state.mean(dim=1)
+        outputs = self._backbone(**inputs)
+        x = outputs.last_hidden_state[:, self._n_prefix:, :] 
+        x = self.gem_pooling(x)
         x = self.projection_head(x)
         if self.config.model.normalize:
             x = F.normalize(x, p=2, dim=1)
@@ -67,7 +74,7 @@ class SiameseDino(DeepModel, nn.Module):
     
 
     def to(self, device):
-        self.backbone.to(device)
+        self._backbone.to(device)
         self.projection_head.to(device)
         self.device = device
         return self
@@ -80,8 +87,9 @@ class SiameseDino(DeepModel, nn.Module):
         img = Image.open(ref_path)
         
         with torch.no_grad():
-            inputs = self.processor(images=[img], return_tensors="pt").to(self.device)
+            inputs = self._processor(images=[img], return_tensors="pt").to(self.device)
             embedding = self(**inputs)
+            embedding = F.normalize(embedding, p=2, dim=1)
 
         return embedding.cpu()
     
@@ -129,7 +137,7 @@ class SiameseDino(DeepModel, nn.Module):
         cumulative_neg_dist = 0.0
         cumulative_triplets_count = 0
         for images, labels in train_dataloader:
-            inputs = self.processor(images=images, return_tensors="pt").to(self.device)
+            inputs = self._processor(images=images, return_tensors="pt").to(self.device)
             embeddings = self(**inputs)
             triplets = self._mine_semi_hard_triplets_cdist(embeddings, labels)
             if not triplets:
@@ -159,7 +167,7 @@ class SiameseDino(DeepModel, nn.Module):
                 "negative_dist": cumulative_neg_dist,
                 "triplets_mined": cumulative_triplets_count}
 
-
+    @torch.no_grad
     def _mine_semi_hard_triplets_cdist(self, embeddings: torch.Tensor, labels: np.ndarray) -> List[tuple]:
         """
         Vectorized semi-hard negative mining using torch.cdist.
@@ -213,6 +221,7 @@ class SiameseDino(DeepModel, nn.Module):
                     triplets.append((anchor_idx, positive_idx, semi_hard_neg_idx))
                     
         return triplets
+    
 
     @torch.no_grad()
     def _evaluate_new_iteration(self, gallery_dataloader: DataLoader, query_dataloader, metric: Metric) -> dict:
@@ -220,7 +229,7 @@ class SiameseDino(DeepModel, nn.Module):
         gallery_embeddings, gallery_labels = self._compute_embeddings(gallery_dataloader)
         query_embeddings, query_labels = self._compute_embeddings(query_dataloader)
 
-        dists = self.distance_strategy.compute_distances_batch(
+        dists = self.compute_distances(
             query_embeddings,
             gallery_embeddings
         )
@@ -228,6 +237,20 @@ class SiameseDino(DeepModel, nn.Module):
         scores = metric.compute(dists, query_labels, gallery_labels)
 
         return scores
+    
+    
+    def compute_distances(
+        self,
+        query_features: torch.Tensor,
+        stored_features_batch: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Calcule les distances entre query et un batch.
+        Optimisé pour la vectorisation.
+        """
+        dists = torch.cdist(query_features, stored_features_batch, p=2)
+        return dists
+    
 
     @timed
     @torch.no_grad()
@@ -251,7 +274,7 @@ class SiameseDino(DeepModel, nn.Module):
 
         query_embeddings, query_labels = self._compute_embeddings(query_dataloader)
 
-        dists = self.distance_strategy.compute_distances_batch(
+        dists = self.compute_distances(
             query_embeddings,
             torch.stack(self.gallery_store.get_feature_gallery())
         )
@@ -262,7 +285,7 @@ class SiameseDino(DeepModel, nn.Module):
     
 
     def prepare_gallery(self, gallery_dataloader: DataLoader) -> None:
-        self.gallery_store = InMemoryStore(self.distance_strategy)
+        self.gallery_store = InMemoryStore()
         print("🔨 Preparing gallery (computing embeddings)...")
         gallery_embeddings, gallery_labels = self._compute_embeddings(gallery_dataloader)
         gallery_paths = gallery_dataloader.dataset.images_paths
@@ -279,7 +302,7 @@ class SiameseDino(DeepModel, nn.Module):
 
         with torch.no_grad():
             for images, labels in dataloader:
-                inputs = self.processor(images=images, return_tensors="pt").to(self.device)
+                inputs = self._processor(images=images, return_tensors="pt").to(self.device)
                 emb = self(**inputs)
                 if not self.config.model.normalize:
                     emb = F.normalize(emb, p=2, dim=1)
@@ -301,6 +324,6 @@ class SiameseDino(DeepModel, nn.Module):
             
 
 class PrototypicalNetwork(DeepModel, nn.Module):
-    def __init__(self, backbone, output_dim, normalize: bool=True, dropout: float=0.0):
+    def __init__(self, _backbone, output_dim, normalize: bool=True, dropout: float=0.0):
         super().__init__()
         pass

@@ -5,66 +5,8 @@ from src.types import Matrix
 import torch
 from scipy.sparse import csr_matrix
 
+from src.types import DistanceKernel
 
-class DistanceStrategy(ABC):
-    """
-    Stratégie pour calculer la distance entre features.
-    Chaque modèle fournit sa propre stratégie.
-    """
-    
-    @abstractmethod
-    def compute_distances(
-        self, 
-        query_features: Any, 
-        stored_features: Any
-    ) -> float:
-        """Calcule la distance entre query et stored."""
-        pass
-    
-    @abstractmethod
-    def compute_distances_batch(
-        self,
-        query_features: Any,
-        stored_features_batch: List[Any]
-    ) -> np.ndarray:
-        """
-        Calcule les distances entre query et un batch.
-        Optimisé pour la vectorisation.
-        """
-        pass
-
-
-class VectorBasedDistance(DistanceStrategy):
-
-    def __init__(self):
-        pass
-
-    def compute_distances(
-        self, 
-        query_features: torch.Tensor, 
-        stored_features: np.ndarray
-    ) -> np.ndarray:
-        dists = torch.cdist(query_features.unsqueeze(0), torch.stack(stored_features), p=2)
-        return dists.numpy()
-    
-    def compute_distances_batch(
-        self,
-        query_features: torch.Tensor,
-        stored_features_batch: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        Calcule les distances entre query et un batch.
-        Optimisé pour la vectorisation.
-        """
-        dists = torch.cdist(query_features, stored_features_batch, p=2)
-        return dists
-
-
-class DistanceKernel(ABC):
-    
-    @abstractmethod
-    def pairwise(self, query, gallery) -> np.ndarray:
-        pass
 
 class BinaryJaccardKernel(DistanceKernel):
 
@@ -98,21 +40,22 @@ class BinaryJaccardKernel(DistanceKernel):
     
 class EuclidianDistanceKernel(DistanceKernel):
 
-    def preprocess(self):
-        x = x / np.maximum(x.sum(axis=1, keepdims=True), 1e-12)
-        return np.sqrt(x)
+    def preprocess(self, batch: np.ndarray) -> np.ndarray:
+        return batch
 
-    def pairwise(self, gallery: torch.Tensor, query: torch.Tensor) -> torch.Tensor:
-        dists = torch.cdist(query, gallery, p=2)
+    def pairwise(self, query: np.ndarray, gallery: np.ndarray) -> torch.Tensor:
+        dists = torch.cdist(torch.from_numpy(query), torch.from_numpy(gallery), p=2)
+
+        return dists
 
 
 class BhattacharyyaKernel(DistanceKernel):
 
-    def preprocess(self, batch: np.ndarray):
-        return np.sqrt(batch)
+    def preprocess(self, query: np.ndarray) -> np.ndarray:
+        return np.sqrt(query)
     
-    def pairwise(self, preprocessed_query: np.ndarray, preprocessed_gallery: np.ndarray):
-        similarity = preprocessed_query.dot(preprocessed_gallery.T)
+    def pairwise(self, query: np.ndarray, gallery: np.ndarray):
+        similarity = query.dot(gallery.T)
         similarity = np.clip(similarity, 1e-10, 1.0)
         distances = -np.log(similarity)
 

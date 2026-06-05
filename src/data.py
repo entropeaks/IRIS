@@ -4,11 +4,14 @@ import random
 from collections import defaultdict
 from typing import Union
 import torch
-from torch.utils.data import Dataset, Sampler, DataLoader
+from torch.utils.data import Dataset, Sampler
 from torchvision.transforms import v2
 from transformers.image_utils import load_image
 from typing import Tuple
 import numpy as np
+from PIL import Image
+
+from src.preprocess import Transform
 
 RANDOM_SEED = 42
 
@@ -39,13 +42,13 @@ def extract_paths_and_labels(directory: Path) -> Tuple[list, list]:
 class DataPreparator():
 
     def __init__(self,
-                original_data_path: Path,
-                augmented_data_path: Path,
+                original_data_path: str,
+                augmented_data_path: str,
                 random_seed: int=RANDOM_SEED,
                 shuffle: bool=True
                 ):
-        self.original_data_path = original_data_path
-        self.augmented_data_path = augmented_data_path
+        self.original_data_path = Path(original_data_path)
+        self.augmented_data_path = Path(augmented_data_path)
         self.random_seed = random_seed
         self.classes = self._get_classes()
         self.num_classes = len(self.classes)
@@ -75,20 +78,25 @@ class DataPreparator():
 
         shuffled_classes = np.random.permutation(self.classes)
         self.classes = shuffled_classes
-    
 
-    def _get_classes_splits(self, classes: set, train_ratio: int, val_ratio: int) -> Tuple[set, set, set]:
+
+    def train_val_test_split(self, train_ratio: float, val_ratio: float, max_gallery_instances: int, n_query: int):
+        train_classes, val_classes, test_classes = self._get_tvt_splits(train_ratio, val_ratio)
+        splits = self._create_dataset_splits(train_classes, val_classes, test_classes, max_gallery_instances, n_query)
+
+        return splits
+    
+    
+    def _get_tvt_splits(self, train_ratio, val_ratio):
         num_train = int(self.num_classes * train_ratio)
         num_val = int(self.num_classes * val_ratio)
         
         # Ensure at least 1 class in each split if ratios are small
         num_train = max(1, num_train)
         num_val = max(1, num_val)
-        train_classes = set(classes[:num_train])
-        val_classes = set(classes[num_train : num_train + num_val])
-        test_classes = set(classes[num_train + num_val:])
-        
-        print(f"Splitting classes: {len(train_classes)} Train / {len(val_classes)} Val / {len(test_classes)} Test\n")
+        train_classes = set(self.classes[:num_train])
+        val_classes = set(self.classes[num_train : num_train + num_val])
+        test_classes = set(self.classes[num_train + num_val:])
 
         return train_classes, val_classes, test_classes
     
@@ -98,6 +106,7 @@ class DataPreparator():
         train_classes: set,
         val_classes: set,
         test_classes: set,
+        max_gallery_instances: int,
         k_query: int,
     ):
         """
@@ -124,8 +133,9 @@ class DataPreparator():
             
             orig_class_dir = self.original_data_path / class_name
             orig_images = [str(p) for p in orig_class_dir.glob('*.*')]
-            gallery_paths.extend(orig_images)
-            gallery_labels.extend([int(class_name)] * len(orig_images))
+            gallery_imgs = orig_images[:max_gallery_instances]
+            gallery_paths.extend(gallery_imgs)
+            gallery_labels.extend([int(class_name)] * len(gallery_imgs))
 
         
         print("Processing Validation classes...")
@@ -137,8 +147,9 @@ class DataPreparator():
             val_query_paths.extend(all_class_images[:k_query])
             val_query_labels.extend([int(class_name)] * k_query)
             
-            gallery_paths.extend(all_class_images[k_query:])
-            gallery_labels.extend([int(class_name)] * (len(all_class_images) - k_query))
+            gallery_imgs = all_class_images[k_query : k_query + max_gallery_instances]
+            gallery_paths.extend(gallery_imgs)
+            gallery_labels.extend([int(class_name)] * len(gallery_imgs))
 
         
         print("Processing Test classes...")
@@ -150,8 +161,9 @@ class DataPreparator():
             test_query_paths.extend(all_class_images[:k_query])
             test_query_labels.extend([int(class_name)] * k_query)
             
-            gallery_paths.extend(all_class_images[k_query:])
-            gallery_labels.extend([int(class_name)] * (len(all_class_images) - k_query))
+            gallery_imgs = all_class_images[k_query : k_query + max_gallery_instances]
+            gallery_paths.extend(gallery_imgs)
+            gallery_labels.extend([int(class_name)] * len(gallery_imgs))
 
         print("\n--- Data Split Summary ---")
         print(f"Training Loader:   {len(train_paths):>5} samples from {len(train_classes)} classes (Augmented)")
@@ -168,20 +180,6 @@ class DataPreparator():
         }
 
         return data_splits
-
-
-    def _get_tvt_splits(self, train_ratio, val_ratio):
-        num_train = int(self.num_classes * train_ratio)
-        num_val = int(self.num_classes * val_ratio)
-        
-        # Ensure at least 1 class in each split if ratios are small
-        num_train = max(1, num_train)
-        num_val = max(1, num_val)
-        train_classes = set(self.classes[:num_train])
-        val_classes = set(self.classes[num_train : num_train + num_val])
-        test_classes = set(self.classes[num_train + num_val:])
-
-        return train_classes, val_classes, test_classes
 
 
     def _get_k_fold_splits(self, split_num: int, val_ratio: float) -> Tuple[set, set, set]:
@@ -209,19 +207,18 @@ class DataPreparator():
         return folds
 
 
-    def train_val_test_split(self, train_ratio: float, val_ratio: float, n_query: int):
-        train_classes, val_classes, test_classes = self._get_tvt_splits(train_ratio, val_ratio)
-        splits = self._create_dataset_splits(train_classes, val_classes, test_classes, n_query)
-
-        return splits
-
-
-
 class ImageCollectionDataset(ABC):
-    def __init__(self, images_paths: list[Path], labels: list[int], transform: v2.Compose=None):
+    def __init__(self,
+                 images_paths: list[Path],
+                 labels: list[int],
+                 preprocessor: v2.Compose=None,
+                 transform: v2.Compose=None):
+        
         self.images_paths = images_paths
         self.labels = labels
-        self.transform = transform if transform else make_transform()
+        self.preprocessor = preprocessor
+        self.transform = transform
+
         self.class_to_indices = defaultdict(list)
         for idx, label in enumerate(labels):
             self.class_to_indices[label].append(idx)
@@ -237,43 +234,57 @@ class ImageCollectionDataset(ABC):
 
 # ==== Dataset simple ====
 class CachedCollection(ImageCollectionDataset, Dataset):
-    def __init__(self, images_paths: list[Path], labels: list[int], transform: v2.Compose=None):
-        super().__init__(images_paths, labels, transform)
-        self.images_instances = self.load_images()
+    def __init__(self,
+                 images_paths: list[Path],
+                 labels: list[int],
+                 preprocessor: v2.Compose=None,
+                 transform: v2.Compose=None):
+        
+        super().__init__(images_paths, labels, preprocessor, transform)
+        self.images_instances = self._load_images()
 
-    def load_images(self) -> list:
+    def _load_images(self) -> list[Image.Image]:
         images_instances = []
         for path in self.images_paths:
-            images_instances.append(v2.Resize((224, 224))(load_image(path)))
+            img = load_image(path)
+            img = self.preprocessor(img)
+            images_instances.append(img)
         return images_instances
 
     def __len__(self):
         return len(self.images_instances)
 
-    def __getitem__(self, idx):
-        img = self.transform(self.images_instances[idx])
+    def __getitem__(self, idx) -> Tuple[np.ndarray, int]:
+        img = self.images_instances[idx]
+        if self.transform:
+            img = self.transform(img)
         label = self.labels[idx]
-        return img, label
+        return np.array(img), label
     
 
 class LazyLoadCollection(ImageCollectionDataset, Dataset):
-    def __init__(self, images_paths: list[Path], labels: list[int], transform: v2.Compose=None):
-        super().__init__(images_paths, labels, transform)
+    def __init__(self,
+                 images_paths: list[Path],
+                 labels: list[int],
+                 preprocessor: v2.Compose=None,
+                 transform: v2.Compose=None):
+        super().__init__(images_paths, labels, preprocessor, transform)
 
     def __len__(self):
         return len(self.images_paths)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx) -> Tuple[np.ndarray, int]:
         img = load_image(self.images_paths[idx])
+        img = self.preprocessor(img)
         if self.transform:
             img = self.transform(img)
         label = self.labels[idx]
-        return img, label
+        return np.array(img), label
     
 
 # ==== Sampler pour P classes × K images ====
 class PKSampler(Sampler):
-    def __init__(self, dataset, P, K):
+    def __init__(self, dataset: ImageCollectionDataset, P: int, K: int):
         self.P = P  # classes per batch
         self.K = K  # images per class
         self.dataset = dataset

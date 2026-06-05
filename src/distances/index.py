@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from typing import TypeAlias, Any
 from scipy.sparse import csr_matrix
 import numpy as np
 from scipy.sparse import csr_matrix
@@ -7,40 +6,25 @@ from sklearn.preprocessing import normalize
 from src.distances.kernels import DistanceKernel
 
 from src.types import Feature
-from src.types import Matrix
-
-class BaseIndex(ABC):
-    def __init__(self, kernel: DistanceKernel):
-        self._kernel = kernel
-        self._gallery: Matrix | None = None
-
-    @abstractmethod
-    def build(self, gallery_features: list[Feature]) -> None: ...
-    
-    @abstractmethod
-    def update(self, features: list[Feature]) -> None: ...
-
-    @abstractmethod
-    def encode(self, query_features: list[Feature]) -> Matrix: ...
-    
-    def similarity(self, query_features: list[Feature]) -> np.ndarray:
-        encoded_query = self.encode(query_features)
-        return self._kernel.pairwise(encoded_query, self._gallery)
+from src.types import BaseIndex, DistanceKernel
 
 
 class DenseIndex(BaseIndex):
 
     def __init__(self, kernel: DistanceKernel):
         super().__init__(kernel)
-        self._gallery: np.ndarray = None
+        self._gallery = []
         self._kernel = kernel
 
     def build(self, gallery_features: list[Feature]):
         stacked = np.vstack([f.ravel() for f in gallery_features])
         self._gallery = self._kernel.preprocess(stacked)
+        self._is_empty = False
 
-    def update(self, query_features: list[np.ndarray]):
-        pass
+    def update(self, new_gallery_features: list[Feature]):
+        stacked = np.vstack([f.ravel() for f in new_gallery_features])
+        preprocessed = self._kernel.preprocess(stacked)
+        self._gallery = np.concat((self._gallery, preprocessed), axis=0) # TODO: modify soon, won't scale
 
     def encode(self, query_features: np.ndarray) -> np.ndarray:
         stacked = np.vstack([f.ravel() for f in query_features])
@@ -100,6 +84,7 @@ class SparseIndex(BaseIndex):
     def build(self, gallery_features):
         raw = self._build_raw_gallery(gallery_features)
         self._gallery = self._weighting_strategy.fit_transform(raw)
+        self._is_empty = False
 
     def _build_raw_gallery(self, gallery_features: list[Feature]):
         rows = []
@@ -153,16 +138,3 @@ class SparseIndex(BaseIndex):
                                     shape=(n_entries, len(self._vocabulary)))
 
         return query_matrix
-
-
-class IndexManager():
-
-    def __init__(self, index: list[BaseIndex]):
-        self._index = index
-
-    def get_index(self, i: int) -> BaseIndex:
-        return self._index[i]
-    
-    def build(self, features_blocks: list[Feature]):
-        for i, index in enumerate(self._index):
-            index.build(features_blocks[i])
