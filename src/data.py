@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
 import random
+import warnings
 from collections import defaultdict
 from typing import Union
 import torch
@@ -117,6 +118,7 @@ class DataPreparator():
         np.random.seed(self.random_seed)
 
         
+        short_classes = 0
         train_paths, train_labels = [], []
         gallery_paths, gallery_labels = [], []
         val_query_paths, val_query_labels = [], []
@@ -144,8 +146,10 @@ class DataPreparator():
             all_class_images = [str(p) for p in orig_class_dir.glob('*.*')]
             random.shuffle(all_class_images)
             
-            val_query_paths.extend(all_class_images[:k_query])
-            val_query_labels.extend([int(class_name)] * k_query)
+            query_imgs = all_class_images[:k_query]
+            val_query_paths.extend(query_imgs)
+            val_query_labels.extend([int(class_name)] * len(query_imgs))
+            short_classes += len(query_imgs) < k_query
             
             gallery_imgs = all_class_images[k_query : k_query + max_gallery_instances]
             gallery_paths.extend(gallery_imgs)
@@ -158,12 +162,19 @@ class DataPreparator():
             all_class_images = [str(p) for p in orig_class_dir.glob('*.*')]
             random.shuffle(all_class_images)
             
-            test_query_paths.extend(all_class_images[:k_query])
-            test_query_labels.extend([int(class_name)] * k_query)
+            query_imgs = all_class_images[:k_query]
+            test_query_paths.extend(query_imgs)
+            test_query_labels.extend([int(class_name)] * len(query_imgs))
+            short_classes += len(query_imgs) < k_query
             
             gallery_imgs = all_class_images[k_query : k_query + max_gallery_instances]
             gallery_paths.extend(gallery_imgs)
             gallery_labels.extend([int(class_name)] * len(gallery_imgs))
+
+        if short_classes:
+            warnings.warn(f"{short_classes} class(es) hold fewer than k_query={k_query} images "
+                          f"and contribute fewer queries than requested",
+                          RuntimeWarning, stacklevel=2)
 
         print("\n--- Data Split Summary ---")
         print(f"Training Loader:   {len(train_paths):>5} samples from {len(train_classes)} classes (Augmented)")
