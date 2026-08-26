@@ -124,7 +124,7 @@ class DataPreparator():
 
 
         print("Processing Train classes...")
-        for class_name in train_classes:
+        for class_name in sorted(train_classes):
             
             aug_class_dir = self.augmented_data_path / class_name
             aug_images = [str(p) for p in aug_class_dir.glob('*.*')]
@@ -139,7 +139,7 @@ class DataPreparator():
 
         
         print("Processing Validation classes...")
-        for class_name in val_classes:
+        for class_name in sorted(val_classes):
             orig_class_dir = self.original_data_path / class_name
             all_class_images = [str(p) for p in orig_class_dir.glob('*.*')]
             random.shuffle(all_class_images)
@@ -153,7 +153,7 @@ class DataPreparator():
 
         
         print("Processing Test classes...")
-        for class_name in test_classes:
+        for class_name in sorted(test_classes):
             orig_class_dir = self.original_data_path / class_name
             all_class_images = [str(p) for p in orig_class_dir.glob('*.*')]
             random.shuffle(all_class_images)
