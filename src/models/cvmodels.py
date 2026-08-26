@@ -174,13 +174,18 @@ class FeatureBasedEstimator(BaseModel):
     def _rerank(self, query_imgs: Dataset, dists: list[list[float|int]]):
         candidates_indices = np.argsort(dists, axis=1)[:, :self._top_k_candidates]
         candidates_dists = self._reranker.score(query_imgs, self._gallery_dataset, candidates_indices)
-        reranker_normalized_scores = self._fusion_strategy.normalize_distances(candidates_dists)
 
         nQ = dists.shape[0]
         row_indices = np.arange(nQ)[:, None]
         original_dists_for_candidates = dists[row_indices, candidates_indices]
-        
-        final_candidates_scores = original_dists_for_candidates + reranker_normalized_scores
+
+        # the reranker is fused as one more channel over the shortlist rather than
+        # added to the retrieval distance: the two live on unrelated scales, so the
+        # sum gave the reranker a weight that drifted with the gallery size
+        final_candidates_scores = self._fusion_strategy.fuse([
+            self._fusion_strategy.normalize_distances(original_dists_for_candidates),
+            self._fusion_strategy.normalize_distances(candidates_dists),
+        ])
 
         new_dists = np.full(dists.shape, np.inf)
         for i in range(len(candidates_dists)):
