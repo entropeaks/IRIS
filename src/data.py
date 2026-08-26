@@ -3,7 +3,6 @@ from pathlib import Path
 import random
 import warnings
 from collections import defaultdict
-from typing import Union
 import torch
 from torch.utils.data import Dataset, Sampler
 from torchvision.transforms import v2
@@ -11,8 +10,6 @@ from transformers.image_utils import load_image
 from typing import Tuple
 import numpy as np
 from PIL import Image
-
-from src.preprocess import Transform
 
 RANDOM_SEED = 42
 
@@ -59,26 +56,24 @@ class DataPreparator():
 
     def _get_classes(self):
         if not self.original_data_path.exists():
-            print(f"Error: Original data directory not found at {self.original_data_path}")
-            return None
-        
+            raise FileNotFoundError(f"Original data directory not found at {self.original_data_path}")
+
         all_classes = sorted([d.name for d in self.original_data_path.iterdir() if d.is_dir()])
         num_classes = len(all_classes)
-        
+
         if num_classes == 0:
-            print(f"Error: No class folders found in {self.original_data_path}")
-            return None
+            raise ValueError(f"No class folders found in {self.original_data_path}")
 
         print(f"Found {num_classes} total classes.")
         return all_classes
-        
 
-    def _shuffle_classes(self) -> list:
+
+    def _shuffle_classes(self) -> None:
         random.seed(self.random_seed)
         np.random.seed(self.random_seed)
 
         shuffled_classes = np.random.permutation(self.classes)
-        self.classes = shuffled_classes
+        self.classes = list(shuffled_classes)
 
 
     def train_val_test_split(self, train_ratio: float, val_ratio: float, max_gallery_instances: int, n_query: int):
@@ -89,6 +84,12 @@ class DataPreparator():
     
     
     def _get_tvt_splits(self, train_ratio, val_ratio):
+        if train_ratio + val_ratio >= 1:
+            raise ValueError(
+                f"train_ratio + val_ratio must be < 1 to leave room for a test split "
+                f"(got {train_ratio} + {val_ratio} = {train_ratio + val_ratio})"
+            )
+
         num_train = int(self.num_classes * train_ratio)
         num_val = int(self.num_classes * val_ratio)
         
@@ -135,6 +136,7 @@ class DataPreparator():
             
             orig_class_dir = self.original_data_path / class_name
             orig_images = [str(p) for p in orig_class_dir.glob('*.*')]
+            random.shuffle(orig_images)
             gallery_imgs = orig_images[:max_gallery_instances]
             gallery_paths.extend(gallery_imgs)
             gallery_labels.extend([int(class_name)] * len(gallery_imgs))
@@ -193,7 +195,7 @@ class DataPreparator():
         return data_splits
 
 
-    def _get_k_fold_splits(self, split_num: int, val_ratio: float) -> Tuple[set, set, set]:
+    def _get_k_fold_splits(self, split_num: int, val_ratio: float) -> Tuple[set, set]:
         val_start_idx = int(split_num * val_ratio * self.num_classes)
         val_stop_idx = int((split_num+1) * val_ratio * self.num_classes)
         val_classes = set(self.classes[val_start_idx:val_stop_idx])
@@ -204,17 +206,18 @@ class DataPreparator():
 
     def get_k_folds(self,
                     k: int,
+                    max_gallery_instances: int,
                     n_query: int=1):
         folds = []
         val_ratio = 1/k
         for split_num in range(k):
             print(f"================ PROCESSING SPLIT {split_num} ================")
             train_split, val_split = self._get_k_fold_splits(split_num, val_ratio)
-            fold = self._create_dataset_splits(train_split, val_split, set(), n_query)
+            fold = self._create_dataset_splits(train_split, val_split, set(), max_gallery_instances, n_query)
             fold.pop("test_query")
             folds.append(fold)
             print("\n")
-        
+
         return folds
 
 
@@ -239,7 +242,7 @@ class ImageCollectionDataset(ABC):
         pass
 
     @abstractmethod
-    def __getitem__(self, idx: Union[int, list[int]]):
+    def __getitem__(self, idx: int):
         pass
 
 
