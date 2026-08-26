@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Tuple, Generator
+from typing import List, Tuple, Generator, Optional
 import random
 from tqdm import tqdm
 from pathlib import Path
@@ -180,7 +180,9 @@ class BackgroundTransform(Transform):
 
 class YOLOCustomCrop(Transform):
 
-    def __init__(self, model_path: str, bg_color: Tuple=(128, 128, 128)):
+    def __init__(self, model_path: str, bg_color: Optional[Tuple]=(128, 128, 128)):
+        """`bg_color=None` crops to the mask's bounding box but keeps the original
+        pixels, which isolates the crop from the background removal."""
         self._model_path = model_path
         self._bg_color = bg_color
         logging.getLogger("ultralytics").setLevel(logging.WARNING)
@@ -202,8 +204,11 @@ class YOLOCustomCrop(Transform):
         mask = np.zeros((h, w), dtype=np.uint8)
         cv2.fillPoly(mask, [points], 255)
 
-        background = np.full_like(img, self._bg_color)
-        result_img = np.where(mask[:, :, None] == 255, img, background)
+        if self._bg_color is None:
+            result_img = img
+        else:
+            background = np.full_like(img, self._bg_color)
+            result_img = np.where(mask[:, :, None] == 255, img, background)
 
         x, y, bw, bh = cv2.boundingRect(points)
         cropped = result_img[y:y+bh, x:x+bw]
