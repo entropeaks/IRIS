@@ -17,10 +17,9 @@ def set_device(device: str = None) -> torch.device:
     """Resolve a device string, falling back to CPU when the backend is missing.
 
     Accepts "auto"/"gpu" (pick the best available), "cpu", and "cuda"/"mps" with
-    an optional index. Previously only the exact string "mps:0" ever selected a
-    GPU: "gpu" -- the value shipped in config/config.yaml -- "mps" and "cuda:0"
-    all fell through to CPU silently, so the whole framework ran on CPU without
-    saying so. Unavailable backends now warn instead of degrading quietly.
+    an optional index. A requested backend that is unavailable warns rather than
+    degrading silently, since a run that quietly lands on CPU looks identical to
+    one that was configured for it.
     """
     requested = (device or "auto").strip().lower()
 
