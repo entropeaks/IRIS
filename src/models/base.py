@@ -32,28 +32,39 @@ def timed(func):
 
 
 def with_energy_consumption(func):
+    """Measure the energy a method draws, without letting the meter affect it.
+
+    Failures in codecarbon are reported and the call proceeds untracked; failures
+    in the wrapped method propagate. Only the measurement is best-effort.
+    """
     @wraps(func)
     def wrapper(self, *args, **kwargs):
-        if self._evaluate_energy_consumption:
+        if not self._evaluate_energy_consumption:
+            return func(self, *args, **kwargs)
+
+        try:
+            tracker = EmissionsTracker(log_level="critical", save_to_file=False)
+            tracker.start_task(func.__name__)
+        except Exception as err:
+            print(f"Energy tracking unavailable, running untracked: {err}")
+            return func(self, *args, **kwargs)
+
+        try:
+            result = func(self, *args, **kwargs)
+        finally:
             try:
-                tracker = EmissionsTracker(log_level="critical", save_to_file=False)
-                tracker.start_task(func.__name__)
-                result = func(self, *args, **kwargs)
-                tracker_results = tracker.stop_task(func.__name__)
-                energy = tracker_results.energy_consumed
-                carbon_footprint = tracker_results.emissions
-                print(f"Energy consumption for {func.__name__} = {energy:.6f} kWh")
-                print(f"Carbon footprint for {func.__name__} = {carbon_footprint:.6f} g.eq.CO2")
-                self.update_carbon(carbon_footprint)
-                self.update_energy(energy)
+                measurement = tracker.stop_task(func.__name__)
+                tracker.stop()
             except Exception as err:
                 print(f"Energy consumption unreadable: {err}")
-                result = func(self, *args, **kwargs)
-            finally:
-                _ = tracker.stop()
-        else:
-            result = func(self, *args, **kwargs)
-        
+                measurement = None
+
+        if measurement is not None:
+            print(f"Energy consumption for {func.__name__} = {measurement.energy_consumed:.6f} kWh")
+            print(f"Carbon footprint for {func.__name__} = {measurement.emissions:.6f} g.eq.CO2")
+            self.update_carbon(measurement.emissions)
+            self.update_energy(measurement.energy_consumed)
+
         return result
 
     return wrapper
