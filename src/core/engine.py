@@ -164,8 +164,8 @@ class SearchEngine(BaseModel):
 
         for batch_imgs, batch_labels in tqdm(dataloader, desc="Computing features"):
             labels.extend(batch_labels)
-            for i, ch in enumerate(self._channels):
-                features_blocks[i].extend(ch.extractor.get_features(batch_imgs))
+            for block, batch_features in zip(features_blocks, self._extract(batch_imgs)):
+                block.extend(batch_features)
 
         if update_index:
             for ch, features_block in zip(self._channels, features_blocks):
@@ -175,6 +175,26 @@ class SearchEngine(BaseModel):
                     ch.index.build(features_block)
 
         return features_blocks, labels
+
+
+    def _extract(self, images: list) -> list[list[Feature]]:
+        """Run every channel over one batch of images, in channel order."""
+        return [ch.extractor.get_features(images) for ch in self._channels]
+
+
+    def _load(self, image_path: str) -> np.ndarray:
+        return np.array(self._preprocessor(load_image(image_path)))
+
+
+    def _rank_gallery(self, image: np.ndarray) -> np.ndarray:
+        """Distances from one image to every gallery entry, reranked if configured."""
+        if self._gallery_store is None or not len(self._gallery_store):
+            raise ValueError("Gallery is empty. Call prepare_gallery() first.")
+
+        dists = self._compute_distances(self._extract([image]))
+        if self._reranker:
+            dists = self._rerank([(image, None)], dists)
+        return dists[0]
     
     
     def _compute_distances(self, query_features: list[list[Feature]]):
@@ -222,55 +242,28 @@ class SearchEngine(BaseModel):
     
     
     @timed
-    def inference(self, query_path: str) -> List:
+    def inference(self, query_path: str) -> str:
+        """Closest gallery entry to one image.
 
-        if self._gallery_store is None:
-            raise ValueError(
-                "Gallery store not initialized. Call prepare_gallery() first."
-            )
-        
-        img = load_image(query_path)
-        img = self._preprocessor(img)
-        img = np.array(img)
+        Timed separately from find_nearest_neighbors so the cost of a single
+        query stays measurable on its own.
+        """
+        return self._gallery_store[int(np.argmin(self._rank_gallery(self._load(query_path))))]
 
-        query_features , _ = self._compute_features([[[img], []]], update_index=False)
 
-        dists = self._compute_distances(query_features)
-        if self._reranker:
-            dists = self._rerank([[img], []], dists)
-
-        idx = np.argmin(dists)
-
-        return self._gallery_store[idx]
-    
     @timed
-    def find_nearest_neighbors(self, query_path, k):
+    def find_nearest_neighbors(self, query_path: str, k: int) -> List[str]:
+        """The k closest gallery entries to one image."""
+        ranking = np.argsort(self._rank_gallery(self._load(query_path)))[:k]
+        return self._gallery_store[ranking]
 
-        if self._gallery_store is None:
-            raise ValueError(
-                "Gallery store not initialized. Call prepare_gallery() first."
-            )
-        
-        img = load_image(query_path)
-        img = self._preprocessor(img)
-        img = np.array(img)
-
-        query_features , _ = self._compute_features([[[img], []]], update_index=False)
-
-        dists = self._compute_distances(query_features)
-        if self._reranker:
-            dists = self._rerank([[img], []], dists)
-
-        idx = np.argsort(dists)[:, :k][0]
-
-
-        return self._gallery_store[idx]
-    
 
     def add_to_gallery(self, path: str) -> None:
-        img = load_image(path)
-        img = self._preprocessor(img)
-        img = np.array(img)
-
-        img_features , _ = self._compute_features([[[img], []]], update_index=True)
-        self._gallery_store.add(path, img_features[0])
+        features = self._extract([self._load(path)])
+        for ch, block in zip(self._channels, features):
+            if ch.index.is_empty():
+                ch.index.build(block)
+            else:
+                ch.index.update(block)
+        # one feature per channel, the shape bulk_add stores
+        self._gallery_store.add(path, [block[0] for block in features])
