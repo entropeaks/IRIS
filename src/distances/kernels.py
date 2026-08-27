@@ -40,9 +40,6 @@ class BinaryJaccardKernel(DistanceKernel):
     
 class EuclidianDistanceKernel(DistanceKernel):
 
-    def preprocess(self, batch: np.ndarray) -> np.ndarray:
-        return batch
-
     def pairwise(self, query: np.ndarray, gallery: np.ndarray) -> torch.Tensor:
         dists = torch.cdist(torch.from_numpy(query), torch.from_numpy(gallery), p=2)
 
