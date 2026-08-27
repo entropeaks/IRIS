@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, vstack
 import numpy as np
-from scipy.sparse import csr_matrix
 from sklearn.preprocessing import normalize
 from src.distances.kernels import DistanceKernel
 
@@ -111,8 +110,19 @@ class SparseIndex(BaseIndex):
             self._vocabulary[word] = len(self._vocabulary)
         
 
-    def update(self):
-        raise NotImplementedError("This method hasn't been implemented yet.")
+    def update(self, new_gallery_features: list[Feature]) -> None:
+        """Append entries to the index, encoded against the vocabulary built earlier.
+
+        Words absent from that vocabulary are dropped, the same rule `encode`
+        already applies to queries: growing the vocabulary would mean rebuilding
+        every stored row and refitting the weighting, which is `build`'s job.
+        """
+        if self.is_empty():
+            return self.build(new_gallery_features)
+
+        raw = self._raw_encode_with_fixed_vocab(new_gallery_features)
+        self._gallery = vstack([self._gallery, self._weighting_strategy.transform(raw)],
+                               format="csr")
     
 
     def encode(self, query_features: list[list[str]]) -> csr_matrix:
