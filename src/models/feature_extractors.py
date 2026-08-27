@@ -1,5 +1,6 @@
 
 from pathlib import Path
+import warnings
 from typing import TYPE_CHECKING, List, Tuple
 import uuid
 import numpy as np
@@ -220,7 +221,13 @@ class MockRun:
 
 
 class SiameseDino(FeatureExtractor, nn.Module):
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, run: "Run"=None):
+        """Frozen-backbone embedder with a trainable projection head.
+
+        `run` receives an existing W&B run. Without one, a run is opened only if
+        `base.wandb_project_name` is configured; otherwise metrics go to a no-op
+        sink, so the model can be built offline and in tests.
+        """
 
         nn.Module.__init__(self)
 
@@ -248,13 +255,36 @@ class SiameseDino(FeatureExtractor, nn.Module):
 
         self.gallery_labels = None
         self._name = f"siamese-{uuid.uuid4().hex[:6]}"
-        import wandb
-
-        self.run = wandb.init(project=config.base.wandb_project_name, entity=config.base.wandb_entity, config=self._config) or MockRun()
+        self.run = run or self._open_run()
 
 
     def set_optimizer(self, optimizer: torch.optim.Optimizer):
         self.optimizer = optimizer
+
+    def _open_run(self):
+        """Start a W&B run when one is configured, else return a no-op sink.
+
+        wandb.init raises on bad credentials, an unreachable server or invalid
+        arguments; training should not die because the logging sideline did. A
+        failure is reported and metrics go to the sink instead.
+
+        It can also hang rather than raise -- login has no timeout by default --
+        which no except clause can catch. Set WANDB_MODE=offline or disabled to
+        rule that out on a machine without network access.
+        """
+        if not self._config.base.wandb_project_name:
+            return MockRun()
+
+        import wandb
+
+        try:
+            return wandb.init(project=self._config.base.wandb_project_name,
+                              entity=self._config.base.wandb_entity,
+                              config=self._config)
+        except Exception as err:
+            warnings.warn(f"W&B run could not be started, metrics will not be logged: {err}",
+                          RuntimeWarning, stacklevel=2)
+            return MockRun()
 
     def set_run(self, run: "Run"):
         self.run = run
