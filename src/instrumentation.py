@@ -1,6 +1,3 @@
-from abc import ABC, abstractmethod
-from ..eval import Metric, Score
-from torch.utils.data import DataLoader
 import time
 from codecarbon import EmissionsTracker
 from functools import wraps
@@ -63,7 +60,18 @@ def with_energy_consumption(func):
     return wrapper
 
 
-class BaseModel(ABC):
+class Instrumented:
+    """Accumulates what an operation cost: wall time, energy, carbon.
+
+    The object half of the `timed` and `with_energy_consumption` decorators,
+    which need `_time_it`, `_evaluate_energy_consumption` and the update
+    methods. Mix it into anything whose cost is worth reporting; it says
+    nothing about what that thing does.
+
+    `time`, `energy` and `carbon` hold the last measured call, `total_*` the
+    running sum -- read the right one, a report that prints `time` after a loop
+    sees only the final iteration.
+    """
 
     def __init__(self,
                  time_it: bool=True,
@@ -78,7 +86,6 @@ class BaseModel(ABC):
         self.total_energy = 0
         self.total_carbon = 0
 
-        self._gallery_prepared = False
 
     def update_time(self, time: int):
         self.time = time
@@ -92,32 +99,3 @@ class BaseModel(ABC):
         self.carbon = carbon
         self.total_carbon += carbon
 
-    @abstractmethod
-    def evaluate(self, metric: Metric) -> Score:
-        pass
-
-    @abstractmethod
-    def inference(self, ref_path: str):
-        pass
-
-    @abstractmethod
-    def find_nearest_neighbors(self, query_path: str, k: int) -> str:
-        pass
-
-    def prepare_gallery(self, gallery_dataloader: DataLoader) -> None:
-        """
-        Pré-calcule et met en cache les features/embeddings de la gallery.
-        
-        Cette méthode est optionnelle mais FORTEMENT RECOMMANDÉE pour les performances.
-        Elle sera appelée automatiquement par evaluate() si nécessaire.
-        
-        Par défaut, ne fait rien (pour les modèles qui ne supportent pas le cache).
-        Les sous-classes peuvent la surcharger pour implémenter le caching.
-        
-        Args:
-            gallery_dataloader: DataLoader de la gallery
-        """
-        self._gallery_prepared = True
-
-    def is_gallery_prepared(self) -> bool:
-        return self._gallery_prepared

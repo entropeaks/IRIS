@@ -19,7 +19,7 @@ from src.eval import Metric
 
 # doctr, transformers and wandb cost roughly 2.7s, 1.0s and 0.5s to import and
 # are each needed by a single class here. Importing them where they are used
-# keeps `import src.models.rerankers` -- which only needs OpenCV -- from paying
+# keeps `import src.rerankers` -- which only needs OpenCV -- from paying
 # for all three.
 if TYPE_CHECKING:
     from wandb import Run

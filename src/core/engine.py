@@ -3,8 +3,8 @@
 from typing import List, Tuple
 from tqdm import tqdm
 from src.eval import Metric, Score
-from src.models.base import BaseModel, timed, with_energy_consumption
-from src.models.rerankers import Reranker
+from src.instrumentation import Instrumented, timed, with_energy_consumption
+from src.rerankers import Reranker
 from ..feature_stores import FeatureStore
 from src.distances.fusion import RRFBasedFusion
 
@@ -36,7 +36,7 @@ def _reject_shuffling(dataloader: DataLoader) -> None:
 
     
 
-class SearchEngine(BaseModel):
+class SearchEngine(Instrumented):
     """Retrieval over one or more feature channels, with optional reranking.
 
     Each `RetrievalChannel` pairs an extractor with an index and a distance
@@ -73,6 +73,7 @@ class SearchEngine(BaseModel):
         self._reranker = reranker
         self._top_k_candidates = top_k_candidates
         self._gallery_dataset: Dataset = None
+        self._gallery_prepared = False
 
 
     def fit(self, train_dataloader: DataLoader):
@@ -175,6 +176,10 @@ class SearchEngine(BaseModel):
                     ch.index.build(features_block)
 
         return features_blocks, labels
+
+
+    def is_gallery_prepared(self) -> bool:
+        return self._gallery_prepared
 
 
     def _extract(self, images: list) -> list[list[Feature]]:
