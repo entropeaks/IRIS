@@ -1,15 +1,5 @@
-from abc import ABC, abstractmethod
-from ..eval import Metric, Score
-from ..config import Config
-from ..feature_stores import FeatureStore
-from torch.utils.data import DataLoader
-from transformers import AutoModel, AutoProcessor
-import torch
 import time
-import uuid
-import random
 from codecarbon import EmissionsTracker
-from typing import Optional, List
 from functools import wraps
 
 
@@ -70,14 +60,18 @@ def with_energy_consumption(func):
     return wrapper
 
 
-def unique_readable_name():
-    adjectives = ["brave", "curious", "eager", "silent", "clever", "wild", "cosmic", "steady"]
-    nouns = ["otter", "phoenix", "comet", "falcon", "nebula", "quark", "mamba", "lynx"]
-    uid = uuid.uuid4().hex[:6]
-    return f"{random.choice(adjectives)}-{random.choice(nouns)}-{uid}"
+class Instrumented:
+    """Accumulates what an operation cost: wall time, energy, carbon.
 
+    The object half of the `timed` and `with_energy_consumption` decorators,
+    which need `_time_it`, `_evaluate_energy_consumption` and the update
+    methods. Mix it into anything whose cost is worth reporting; it says
+    nothing about what that thing does.
 
-class BaseModel(ABC):
+    `time`, `energy` and `carbon` hold the last measured call, `total_*` the
+    running sum -- read the right one, a report that prints `time` after a loop
+    sees only the final iteration.
+    """
 
     def __init__(self,
                  time_it: bool=True,
@@ -92,8 +86,6 @@ class BaseModel(ABC):
         self.total_energy = 0
         self.total_carbon = 0
 
-        self._gallery_prepared = False
-        self.gallery_store: FeatureStore = None
 
     def update_time(self, time: int):
         self.time = time
@@ -107,60 +99,3 @@ class BaseModel(ABC):
         self.carbon = carbon
         self.total_carbon += carbon
 
-    @abstractmethod
-    def evaluate(self, metric: Metric) -> Score:
-        pass
-
-    @abstractmethod
-    def inference(self, ref_path: str):
-        pass
-
-    @abstractmethod
-    def find_nearest_neighbors(self, query_path: str, k: int) -> str:
-        pass
-
-    def prepare_gallery(self, gallery_dataloader: DataLoader) -> None:
-        """
-        Pré-calcule et met en cache les features/embeddings de la gallery.
-        
-        Cette méthode est optionnelle mais FORTEMENT RECOMMANDÉE pour les performances.
-        Elle sera appelée automatiquement par evaluate() si nécessaire.
-        
-        Par défaut, ne fait rien (pour les modèles qui ne supportent pas le cache).
-        Les sous-classes peuvent la surcharger pour implémenter le caching.
-        
-        Args:
-            gallery_dataloader: DataLoader de la gallery
-        """
-        self._gallery_prepared = True
-
-    def is_gallery_prepared(self) -> bool:
-        return self._gallery_prepared
-
-
-class DeepModel(BaseModel):
-
-    def __init__(self,
-                 config: Config,
-                 time_it: bool=True,
-                 evaluate_energy_consumption: bool=True
-                 ):
-        super().__init__(time_it, evaluate_energy_consumption)
-        self.config = config
-        self.name = unique_readable_name()
-    
-    @abstractmethod
-    @with_energy_consumption
-    @timed
-    def fit(self, dataloader: DataLoader) -> None:
-        pass
-    
-    @abstractmethod
-    @with_energy_consumption
-    @timed
-    def fit_and_evaluate(self, epochs: int, metric: Metric):
-        pass
-    
-    @abstractmethod
-    def save(self):
-        pass

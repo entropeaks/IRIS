@@ -23,7 +23,15 @@ class FeatureExtractor(ABC):
 
 
 class DistanceKernel(ABC):
-    
+
+    def preprocess(self, batch: Matrix) -> Matrix:
+        """Shape a feature matrix for `pairwise`; identity unless a kernel needs more.
+
+        `DenseIndex` calls this on both sides before comparing, so every kernel
+        must answer it even when it has nothing to do.
+        """
+        return batch
+
     @abstractmethod
     def pairwise(self, query, gallery) -> ndarray:
         pass

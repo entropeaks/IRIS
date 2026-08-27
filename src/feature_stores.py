@@ -49,44 +49,54 @@ def total_size(o, handlers={}, verbose=False):
 
 
 class FeatureStore(ABC):
+    """Storage for the per-channel features of a gallery.
+
+    An entry is one image id mapped to a list holding one feature per retrieval
+    channel, in channel order. "Blocks" slice that the other way: block `i` is
+    channel `i`'s feature for every stored image, which is the shape an index
+    is built from.
     """
-    Interface abstraite pour le stockage de features.
-    Permet de swap entre différents backends (RAM, DB, Faiss).
-    """
-    
-    @abstractmethod
-    def add(self, image_id: str, features: Any):
-        """Ajoute une image et ses features au store."""
-        pass
-    
-    @abstractmethod
-    def bulk_add(self, items: list[Tuple[str, np.ndarray, dict]]):
-        """Ajoute plusieurs images en batch (plus efficace)."""
-        pass
 
     @abstractmethod
-    def get_feature_block(self) -> list:
-        pass
+    def add(self, image_id: str, features: list[Feature]) -> None:
+        """Store one feature per channel for `image_id`, replacing any previous entry."""
 
     @abstractmethod
-    def get_features_blocks(self) -> list:
-        pass
-    
+    def bulk_add(self, image_ids: list[str], blocks: list[list[Feature]]) -> None:
+        """Store many entries at once, given per-channel blocks in channel order."""
+
     @abstractmethod
-    def get(self, image_id: str) -> Optional[np.ndarray]:
-        """Récupère les features d'une image."""
-        pass
-    
+    def get(self, image_id: str) -> list[Feature]:
+        """Every channel's feature for one image."""
+
     @abstractmethod
-    def size(self) -> int:
-        """Retourne le nombre d'images dans le store."""
-        pass
-    
+    def get_feature_block(self, block_id: int) -> list[Feature]:
+        """One channel's feature for every stored image, in insertion order."""
+
     @abstractmethod
-    def clear(self):
-        """Vide le store."""
-        pass
-    
+    def get_features_blocks(self) -> list[list[Feature]]:
+        """Every channel's block, in channel order."""
+
+    @abstractmethod
+    def get_feature_gallery(self) -> list[list[Feature]]:
+        """Every entry, in insertion order."""
+
+    @abstractmethod
+    def get_paths_gallery(self) -> list[str]:
+        """The stored image ids, in the order the blocks follow."""
+
+    @abstractmethod
+    def memory_footprint(self) -> int:
+        """Approximate bytes held. Use `len(store)` for the number of entries."""
+
+    @abstractmethod
+    def clear(self) -> None:
+        """Drop everything."""
+
+    @abstractmethod
+    def __len__(self) -> int:
+        """Number of stored entries."""
+
 
 class InMemoryStore(FeatureStore):
 
@@ -109,9 +119,9 @@ class InMemoryStore(FeatureStore):
         self._store[image_id] = features
 
 
-    def bulk_add(self, image_ids, items):
+    def bulk_add(self, image_ids, blocks):
         for i, image_id in enumerate(image_ids):
-            features = [items[j][i] for j in range(len(items))]
+            features = [block[i] for block in blocks]
             self.add(image_id, features)
 
 
@@ -141,7 +151,7 @@ class InMemoryStore(FeatureStore):
         return self._store[image_id]
     
     
-    def size(self):
+    def memory_footprint(self):
         return total_size(self._store)
     
     

@@ -1,35 +1,46 @@
 
-from typing import List, Tuple
-from doctr.models import ocr_predictor
+from pathlib import Path
+import warnings
+from typing import TYPE_CHECKING, List, Tuple
+import uuid
 import numpy as np
 import cv2
 from tqdm import tqdm
 
-
-from transformers import AutoModel, AutoImageProcessor
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from wandb import Run
 
 from src.config import Config
 from src.types import FeatureExtractor
 from src.utils import set_device
 from src.eval import Metric
 
-import wandb
+# doctr, transformers and wandb cost roughly 2.7s, 1.0s and 0.5s to import and
+# are each needed by a single class here. Importing them where they are used
+# keeps `import src.rerankers` -- which only needs OpenCV -- from paying
+# for all three.
+if TYPE_CHECKING:
+    from wandb import Run
 
     
 class DocTRTextExtractor(FeatureExtractor):
 
     def __init__(self):
+        from doctr.models import ocr_predictor
+
         super().__init__()
+        # half precision is a CUDA-only win here; several ops fall back or fail
+        # on cpu and mps, so keep full precision off CUDA
+        device = set_device("auto")
         self.ocr = ocr_predictor(
             det_arch="db_mobilenet_v3_large",
             reco_arch="crnn_mobilenet_v3_small",
             pretrained=True
-        ).cuda().half()
+        ).to(device)
+        if device.type == "cuda":
+            self.ocr = self.ocr.half()
     
     def get_features(self, imgs_arrays_rgb: list[np.ndarray]) -> list[list[str]]:
         result = self.ocr(imgs_arrays_rgb)
@@ -210,11 +221,19 @@ class MockRun:
 
 
 class SiameseDino(FeatureExtractor, nn.Module):
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, run: "Run"=None):
+        """Frozen-backbone embedder with a trainable projection head.
+
+        `run` receives an existing W&B run. Without one, a run is opened only if
+        `base.wandb_project_name` is configured; otherwise metrics go to a no-op
+        sink, so the model can be built offline and in tests.
+        """
 
         nn.Module.__init__(self)
 
         self._config = config
+        from transformers import AutoModel, AutoImageProcessor
+
         self._backbone = AutoModel.from_pretrained(self._config.model.backbone_name)
         self.optimizer = None
         resize = {"height": self._config.train.resize.height, "width": self._config.train.resize.width}
@@ -235,13 +254,39 @@ class SiameseDino(FeatureExtractor, nn.Module):
         self.to(self.device)
 
         self.gallery_labels = None
-        self.run = wandb.init(project=config.base.wandb_project_name, entity=config.base.wandb_entity, config=self._config) or MockRun()
+        self._name = f"siamese-{uuid.uuid4().hex[:6]}"
+        self.run = run or self._open_run()
 
 
     def set_optimizer(self, optimizer: torch.optim.Optimizer):
         self.optimizer = optimizer
 
-    def set_run(self, run: Run):
+    def _open_run(self):
+        """Start a W&B run when one is configured, else return a no-op sink.
+
+        wandb.init raises on bad credentials, an unreachable server or invalid
+        arguments; training should not die because the logging sideline did. A
+        failure is reported and metrics go to the sink instead.
+
+        It can also hang rather than raise -- login has no timeout by default --
+        which no except clause can catch. Set WANDB_MODE=offline or disabled to
+        rule that out on a machine without network access.
+        """
+        if not self._config.base.wandb_project_name:
+            return MockRun()
+
+        import wandb
+
+        try:
+            return wandb.init(project=self._config.base.wandb_project_name,
+                              entity=self._config.base.wandb_entity,
+                              config=self._config)
+        except Exception as err:
+            warnings.warn(f"W&B run could not be started, metrics will not be logged: {err}",
+                          RuntimeWarning, stacklevel=2)
+            return MockRun()
+
+    def set_run(self, run: "Run"):
         self.run = run
 
     def gem_pooling(self, patch_tokens, p=3):
@@ -427,37 +472,6 @@ class SiameseDino(FeatureExtractor, nn.Module):
         return dists
     
 
-    @torch.no_grad()
-    def evaluate(self, gallery_dataloader: DataLoader, query_dataloader: DataLoader, metric: Metric) -> dict:
-        """
-        Compute Recall@k in pure PyTorch.
-        
-        Args:
-            gallery_loader: DataLoader with (image, label) for gallery
-            query_loader: DataLoader with (image, label) for queries
-            metric: Metric to evaluate the model against
-            device: str
-        
-        Returns:
-            recall_at_k: list
-        """
-        self.eval()
-
-        if not self.is_gallery_prepared():
-            self.prepare_gallery(gallery_dataloader)
-
-        query_embeddings, query_labels = self._compute_embeddings(query_dataloader)
-
-        dists = self.compute_distances(
-            query_embeddings,
-            torch.stack(self.gallery_store.get_feature_gallery())
-        )
-
-        scores = metric.compute(dists, query_labels, self.gallery_labels)
-
-        return scores
-    
-    
     def _compute_embeddings(self, dataloader: DataLoader):
         self.eval()
 
@@ -482,6 +496,9 @@ class SiameseDino(FeatureExtractor, nn.Module):
         return np.mean([score for score in metrics.values()]) > best_score
 
 
-    def save(self):
-        torch.save(self.state_dict(), f"{self._config.base.model_checkpoints_path}/{self.name}.pth")
+    def save(self, name: str=None):
+        """Write the state dict under the configured checkpoint directory."""
+        directory = Path(self._config.base.model_checkpoints_path)
+        directory.mkdir(parents=True, exist_ok=True)
+        torch.save(self.state_dict(), directory / f"{name or self._name}.pth")
             

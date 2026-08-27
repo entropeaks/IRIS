@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 from torch.utils.data import Dataset
 
-from src.models.feature_extractors import FeatureExtractor, OrbFeatureExtractor, HSVExtractor
+from src.extractors import FeatureExtractor, OrbFeatureExtractor, HSVExtractor
 from src.distances.kernels import DistanceKernel, BhattacharyyaKernel
 
 
