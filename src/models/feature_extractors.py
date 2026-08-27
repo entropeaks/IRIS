@@ -1,5 +1,7 @@
 
+from pathlib import Path
 from typing import List, Tuple
+import uuid
 from doctr.models import ocr_predictor
 import numpy as np
 import cv2
@@ -235,6 +237,7 @@ class SiameseDino(FeatureExtractor, nn.Module):
         self.to(self.device)
 
         self.gallery_labels = None
+        self._name = f"siamese-{uuid.uuid4().hex[:6]}"
         self.run = wandb.init(project=config.base.wandb_project_name, entity=config.base.wandb_entity, config=self._config) or MockRun()
 
 
@@ -427,37 +430,6 @@ class SiameseDino(FeatureExtractor, nn.Module):
         return dists
     
 
-    @torch.no_grad()
-    def evaluate(self, gallery_dataloader: DataLoader, query_dataloader: DataLoader, metric: Metric) -> dict:
-        """
-        Compute Recall@k in pure PyTorch.
-        
-        Args:
-            gallery_loader: DataLoader with (image, label) for gallery
-            query_loader: DataLoader with (image, label) for queries
-            metric: Metric to evaluate the model against
-            device: str
-        
-        Returns:
-            recall_at_k: list
-        """
-        self.eval()
-
-        if not self.is_gallery_prepared():
-            self.prepare_gallery(gallery_dataloader)
-
-        query_embeddings, query_labels = self._compute_embeddings(query_dataloader)
-
-        dists = self.compute_distances(
-            query_embeddings,
-            torch.stack(self.gallery_store.get_feature_gallery())
-        )
-
-        scores = metric.compute(dists, query_labels, self.gallery_labels)
-
-        return scores
-    
-    
     def _compute_embeddings(self, dataloader: DataLoader):
         self.eval()
 
@@ -482,6 +454,9 @@ class SiameseDino(FeatureExtractor, nn.Module):
         return np.mean([score for score in metrics.values()]) > best_score
 
 
-    def save(self):
-        torch.save(self.state_dict(), f"{self._config.base.model_checkpoints_path}/{self.name}.pth")
+    def save(self, name: str=None):
+        """Write the state dict under the configured checkpoint directory."""
+        directory = Path(self._config.base.model_checkpoints_path)
+        directory.mkdir(parents=True, exist_ok=True)
+        torch.save(self.state_dict(), directory / f"{name or self._name}.pth")
             
