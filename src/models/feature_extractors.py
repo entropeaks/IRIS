@@ -1,37 +1,45 @@
 
 from pathlib import Path
-from typing import List, Tuple
+from typing import TYPE_CHECKING, List, Tuple
 import uuid
-from doctr.models import ocr_predictor
 import numpy as np
 import cv2
 from tqdm import tqdm
 
-
-from transformers import AutoModel, AutoImageProcessor
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from wandb import Run
 
 from src.config import Config
 from src.types import FeatureExtractor
 from src.utils import set_device
 from src.eval import Metric
 
-import wandb
+# doctr, transformers and wandb cost roughly 2.7s, 1.0s and 0.5s to import and
+# are each needed by a single class here. Importing them where they are used
+# keeps `import src.models.rerankers` -- which only needs OpenCV -- from paying
+# for all three.
+if TYPE_CHECKING:
+    from wandb import Run
 
     
 class DocTRTextExtractor(FeatureExtractor):
 
     def __init__(self):
+        from doctr.models import ocr_predictor
+
         super().__init__()
+        # half precision is a CUDA-only win here; several ops fall back or fail
+        # on cpu and mps, so keep full precision off CUDA
+        device = set_device("auto")
         self.ocr = ocr_predictor(
             det_arch="db_mobilenet_v3_large",
             reco_arch="crnn_mobilenet_v3_small",
             pretrained=True
-        ).cuda().half()
+        ).to(device)
+        if device.type == "cuda":
+            self.ocr = self.ocr.half()
     
     def get_features(self, imgs_arrays_rgb: list[np.ndarray]) -> list[list[str]]:
         result = self.ocr(imgs_arrays_rgb)
@@ -217,6 +225,8 @@ class SiameseDino(FeatureExtractor, nn.Module):
         nn.Module.__init__(self)
 
         self._config = config
+        from transformers import AutoModel, AutoImageProcessor
+
         self._backbone = AutoModel.from_pretrained(self._config.model.backbone_name)
         self.optimizer = None
         resize = {"height": self._config.train.resize.height, "width": self._config.train.resize.width}
@@ -238,13 +248,15 @@ class SiameseDino(FeatureExtractor, nn.Module):
 
         self.gallery_labels = None
         self._name = f"siamese-{uuid.uuid4().hex[:6]}"
+        import wandb
+
         self.run = wandb.init(project=config.base.wandb_project_name, entity=config.base.wandb_entity, config=self._config) or MockRun()
 
 
     def set_optimizer(self, optimizer: torch.optim.Optimizer):
         self.optimizer = optimizer
 
-    def set_run(self, run: Run):
+    def set_run(self, run: "Run"):
         self.run = run
 
     def gem_pooling(self, patch_tokens, p=3):

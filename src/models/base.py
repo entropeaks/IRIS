@@ -3,13 +3,11 @@ from ..eval import Metric, Score
 from ..config import Config
 from ..feature_stores import FeatureStore
 from torch.utils.data import DataLoader
-from transformers import AutoModel, AutoProcessor
 import torch
 import time
 import uuid
 import random
 from codecarbon import EmissionsTracker
-from typing import Optional, List
 from functools import wraps
 
 
