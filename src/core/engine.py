@@ -132,10 +132,22 @@ class SearchEngine(Instrumented):
     
     
     def prepare_gallery(self, gallery_dataloader: DataLoader):
+        """Make this dataloader the gallery, replacing whatever was indexed before.
+
+        Rebuilds rather than appends. Calling it twice used to leave the indexes
+        holding the gallery twice while the store, which upserts by path, held it
+        once, so index rows no longer lined up with store entries. Use
+        `add_to_gallery` to extend an existing gallery.
+        """
         print("🔨 Preparing gallery (computing features)...")
         self._gallery_dataset = self._extract_dataset_from_dataloader(gallery_dataloader)
         _reject_shuffling(gallery_dataloader)
         images_paths = self._extract_paths_from_dataloader(gallery_dataloader)
+
+        self._gallery_store.clear()
+        for ch in self._channels:
+            ch.index.clear()
+
         features, _ = self._compute_features(gallery_dataloader, update_index=True)
         self._gallery_store.bulk_add(images_paths, features)
         self._gallery_prepared = True

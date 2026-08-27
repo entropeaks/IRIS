@@ -105,6 +105,16 @@ class SparseIndex(BaseIndex):
                              shape=(n_entries, len(self._vocabulary)))
 
 
+    def clear(self) -> None:
+        """Forget the gallery and the vocabulary built from it.
+
+        The base implementation drops only the matrix; keeping the vocabulary
+        would make a rebuild encode the new corpus against the old one's words.
+        """
+        super().clear()
+        self._vocabulary = {}
+
+
     def _add_to_vocab(self, word: str):
         if word not in self._vocabulary:
             self._vocabulary[word] = len(self._vocabulary)
