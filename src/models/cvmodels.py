@@ -1,6 +1,6 @@
 #This file contains all the computer vision based models implementations
 
-from typing import List
+from typing import List, Tuple
 from tqdm import tqdm
 from src.eval import Metric, Score
 from src.models.base import BaseModel, timed, with_energy_consumption
@@ -11,10 +11,27 @@ from src.distances.fusion import RRFBasedFusion
 from transformers.image_utils import load_image
 import torch
 from torchvision.transforms import v2
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import BatchSampler, DataLoader, Dataset, SequentialSampler
 import numpy as np
 
 from src.types import Feature, RetrievalChannel
+
+
+def _reject_shuffling(dataloader: DataLoader) -> None:
+    """Refuse a dataloader whose order will not match its dataset.
+
+    The gallery index rows and the feature store entries are matched to
+    dataset.images_paths positionally, so a shuffled loader silently pairs each
+    image with another one's path.
+    """
+    sampler = dataloader.batch_sampler if dataloader.batch_sampler is not None else dataloader.sampler
+    if isinstance(sampler, BatchSampler):
+        sampler = sampler.sampler
+    if not isinstance(sampler, SequentialSampler):
+        raise ValueError(
+            f"gallery dataloader must iterate in dataset order, got {type(sampler).__name__}; "
+            f"build it without shuffle=True and without a custom sampler"
+        )
 
 
     
@@ -84,11 +101,11 @@ class FeatureBasedEstimator(BaseModel):
         if not self._gallery_prepared:
             self.prepare_gallery(gallery_dataloader)
 
-        query_labels = torch.tensor(query_dataloader.dataset.labels)
         gallery_labels = torch.tensor(gallery_dataloader.dataset.labels)
 
         print("Computing queries features...")
-        query_features = self._compute_features(query_dataloader, update_index=False)
+        query_features, query_labels = self._compute_features(query_dataloader, update_index=False)
+        query_labels = torch.tensor(query_labels)
         
         distances = self._compute_distances(query_features)
         scores = metric.compute(torch.from_numpy(distances),
@@ -113,8 +130,9 @@ class FeatureBasedEstimator(BaseModel):
     def prepare_gallery(self, gallery_dataloader: DataLoader):
         print("🔨 Preparing gallery (computing features)...")
         self._gallery_dataset = self._extract_dataset_from_dataloader(gallery_dataloader)
+        _reject_shuffling(gallery_dataloader)
         images_paths = self._extract_paths_from_dataloader(gallery_dataloader)
-        features = self._compute_features(gallery_dataloader, update_index=True)
+        features, _ = self._compute_features(gallery_dataloader, update_index=True)
         self._gallery_store.bulk_add(images_paths, features)
         self._gallery_prepared = True
         print(f"✅ Gallery prepared: {len(self._gallery_store)} images")
@@ -128,26 +146,32 @@ class FeatureBasedEstimator(BaseModel):
         return dataloader.dataset.images_paths
     
     
-    def _compute_features(self, dataloader: DataLoader, update_index: bool) -> list[list[Feature]]:
-        features_blocks = []
-        for ch in tqdm(self._channels, desc="Computing features blocks"):
-            features_block = self._compute_channel_features(ch, dataloader)
-            features_blocks.append(features_block)
-            if update_index:
+    def _compute_features(self, dataloader: DataLoader,
+                          update_index: bool) -> Tuple[list[list[Feature]], list]:
+        """Extract every channel in one pass, returning the labels seen alongside.
+
+        The single pass matters: iterating once per channel lets a shuffling
+        dataloader hand each channel a different order, and fusing those blocks
+        would combine rows belonging to different images. Returning the labels
+        from the same pass is what keeps them attached to their features, rather
+        than being read back from the dataset in its own order.
+        """
+        features_blocks = [[] for _ in self._channels]
+        labels = []
+
+        for batch_imgs, batch_labels in tqdm(dataloader, desc="Computing features"):
+            labels.extend(batch_labels)
+            for i, ch in enumerate(self._channels):
+                features_blocks[i].extend(ch.extractor.get_features(batch_imgs))
+
+        if update_index:
+            for ch, features_block in zip(self._channels, features_blocks):
                 if not ch.index.is_empty():
                     ch.index.update(features_block)
                 else:
                     ch.index.build(features_block)
 
-        return features_blocks
-    
-    
-    def _compute_channel_features(self, channel: RetrievalChannel, dataloader: DataLoader) -> list[Feature]:
-        features = []
-        for batch_imgs, _ in dataloader:
-            features.extend(channel.extractor.get_features(batch_imgs))
-
-        return features
+        return features_blocks, labels
     
     
     def _compute_distances(self, query_features: list[list[Feature]]):
@@ -206,7 +230,7 @@ class FeatureBasedEstimator(BaseModel):
         img = self._preprocessor(img)
         img = np.array(img)
 
-        query_features = self._compute_features([[[img], []]], update_index=False)
+        query_features , _ = self._compute_features([[[img], []]], update_index=False)
 
         dists = self._compute_distances(query_features)
         if self._reranker:
@@ -228,7 +252,7 @@ class FeatureBasedEstimator(BaseModel):
         img = self._preprocessor(img)
         img = np.array(img)
 
-        query_features = self._compute_features([[[img], []]], update_index=False)
+        query_features , _ = self._compute_features([[[img], []]], update_index=False)
 
         dists = self._compute_distances(query_features)
         if self._reranker:
@@ -245,7 +269,7 @@ class FeatureBasedEstimator(BaseModel):
         img = self._preprocessor(img)
         img = np.array(img)
 
-        img_features = self._compute_features([[[img], []]], update_index=True)
+        img_features , _ = self._compute_features([[[img], []]], update_index=True)
         self._gallery_store.add(path, img_features[0])
 
     """ def _fit_extractors(self, feature_list: List):
