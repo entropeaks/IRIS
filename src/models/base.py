@@ -1,12 +1,7 @@
 from abc import ABC, abstractmethod
 from ..eval import Metric, Score
-from ..config import Config
-from ..feature_stores import FeatureStore
 from torch.utils.data import DataLoader
-import torch
 import time
-import uuid
-import random
 from codecarbon import EmissionsTracker
 from functools import wraps
 
@@ -68,13 +63,6 @@ def with_energy_consumption(func):
     return wrapper
 
 
-def unique_readable_name():
-    adjectives = ["brave", "curious", "eager", "silent", "clever", "wild", "cosmic", "steady"]
-    nouns = ["otter", "phoenix", "comet", "falcon", "nebula", "quark", "mamba", "lynx"]
-    uid = uuid.uuid4().hex[:6]
-    return f"{random.choice(adjectives)}-{random.choice(nouns)}-{uid}"
-
-
 class BaseModel(ABC):
 
     def __init__(self,
@@ -91,7 +79,6 @@ class BaseModel(ABC):
         self.total_carbon = 0
 
         self._gallery_prepared = False
-        self.gallery_store: FeatureStore = None
 
     def update_time(self, time: int):
         self.time = time
@@ -134,31 +121,3 @@ class BaseModel(ABC):
 
     def is_gallery_prepared(self) -> bool:
         return self._gallery_prepared
-
-
-class DeepModel(BaseModel):
-
-    def __init__(self,
-                 config: Config,
-                 time_it: bool=True,
-                 evaluate_energy_consumption: bool=True
-                 ):
-        super().__init__(time_it, evaluate_energy_consumption)
-        self.config = config
-        self.name = unique_readable_name()
-    
-    @abstractmethod
-    @with_energy_consumption
-    @timed
-    def fit(self, dataloader: DataLoader) -> None:
-        pass
-    
-    @abstractmethod
-    @with_energy_consumption
-    @timed
-    def fit_and_evaluate(self, epochs: int, metric: Metric):
-        pass
-    
-    @abstractmethod
-    def save(self):
-        pass
