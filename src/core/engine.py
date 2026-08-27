@@ -218,7 +218,7 @@ class SearchEngine(Instrumented):
             
             feature_dists.append(normalized_dists)
 
-        fused_dists = self._fusion_strategy.fuse(feature_dists)
+        fused_dists = self._fusion_strategy.fuse(feature_dists, [ch.weight for ch in self._channels])
 
         return fused_dists
     

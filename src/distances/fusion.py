@@ -28,17 +28,24 @@ class RRFBasedFusion():
         return np.apply_along_axis(rankdata, 1, np.asarray(dists, dtype=float))
 
 
-    def fuse(self, feature_ranks: list) -> np.ndarray:
+    def fuse(self, feature_ranks: list, weights: list[float]=None) -> np.ndarray:
         """Combine per-channel ranks into a distance matrix (lower is better).
 
-        Expects the output of `normalize_distances`, not raw distances.
+        Expects the output of `normalize_distances`, not raw distances. Without
+        `weights` every channel counts the same, which is what makes plain RRF
+        unsuitable for channels of unequal strength: a weak one drags a strong
+        one down. Weighting is how a weak channel earns a say without that.
         """
         if not feature_ranks:
             raise ValueError("fuse() needs at least one channel")
+        if weights is None:
+            weights = [1.0] * len(feature_ranks)
+        if len(weights) != len(feature_ranks):
+            raise ValueError(f"got {len(weights)} weights for {len(feature_ranks)} channels")
 
         score = np.zeros_like(np.asarray(feature_ranks[0], dtype=float))
-        for ranks in feature_ranks:
-            score += 1.0 / (self._smoothing_param + np.asarray(ranks, dtype=float))
+        for ranks, weight in zip(feature_ranks, weights):
+            score += weight / (self._smoothing_param + np.asarray(ranks, dtype=float))
 
         # RRF scores are similarities; negate so callers keep treating low as close
         return -score

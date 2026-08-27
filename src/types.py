@@ -65,8 +65,20 @@ class BaseIndex(ABC):
 
 @dataclass
 class RetrievalChannel:
+    """One way of scoring the gallery: an extractor feeding an index.
+
+    The distance kernel belongs to the index, which is the only thing that
+    calls it. `weight` scales this channel's vote during fusion; leave it at
+    1.0 to count as much as the others.
+    """
     extractor: FeatureExtractor
     index: BaseIndex
-    kernel: DistanceKernel
-    weight: Optional[float] = None
+    weight: float = 1.0
     is_trainable: bool = False
+
+    def __post_init__(self):
+        if not isinstance(self.weight, (int, float)) or isinstance(self.weight, bool):
+            raise TypeError(
+                f"weight must be a number, got {type(self.weight).__name__}. "
+                f"The distance kernel goes to the index, not the channel."
+            )
