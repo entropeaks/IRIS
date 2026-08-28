@@ -37,17 +37,20 @@ class Recall(Metric):
         return recall_at_k
 
 
-class ConfusionArray:
-    
+class ConfusionArray(Metric):
+    """Which class each query was actually matched to, for error analysis.
+
+    Answers what recall cannot: not how often retrieval failed but what it
+    reached for instead. Pairs, not a matrix, since most of a square over a
+    hundred classes would be zeros.
+    """
+
     def compute(self,
                 dists: torch.Tensor,
                 query_labels: torch.Tensor,
                 gallery_labels: torch.Tensor
-                ) -> list[list]:
-        
-        topk_indices = dists.topk(1, largest=False).indices
+                ) -> dict:
 
-        l = []
-        for i, q_label in enumerate(query_labels):
-            retrieved_label = gallery_labels[topk_indices[i]]
-            l.append((q_label, retrieved_label))
+        top_indices = dists.topk(1, largest=False).indices.squeeze(1)
+        return {"confusion": [[int(true), int(gallery_labels[retrieved])]
+                              for true, retrieved in zip(query_labels, top_indices)]}
