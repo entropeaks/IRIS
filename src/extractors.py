@@ -60,22 +60,83 @@ class DocTRTextExtractor(FeatureExtractor):
 
 
 class OrbFeatureExtractor(FeatureExtractor):
+    """ORB keypoints, quantised into a bag of visual words.
 
-    def __init__(self, n_features: int=500):
+    ORB gives a variable number of 32-byte descriptors per image, which no index
+    here can hold: `DenseIndex` cannot stack rows of different lengths and
+    `SparseIndex` needs discrete terms. Clustering the corpus's descriptors into
+    a fixed vocabulary turns each one into the id of its nearest centroid, so an
+    image becomes a bag of visual words -- the shape `SparseIndex` was written
+    for, TF-IDF included.
+
+    Without `fit` there is no vocabulary and `get_features` says so rather than
+    returning raw descriptors that would fail further down.
+
+    The descriptors are binary and their natural metric is Hamming, while k-means
+    minimises squared euclidean distance over the bytes. That mismatch is the
+    usual approximation in ORB bag-of-words pipelines: cheap, and good enough
+    because what matters downstream is that similar patches land in the same
+    cluster, not where the centroid sits.
+    """
+
+    def __init__(self, n_features: int=500, vocabulary_size: int=256,
+                 seed: int=42, max_fit_descriptors: int=200_000):
+        self.trainable = True
         self.orb = cv2.ORB_create(nfeatures=n_features)
         self.kmeans = None
+        self.vocabulary_size = vocabulary_size
+        self.seed = seed
+        self.max_fit_descriptors = max_fit_descriptors
 
-    def get_features(self, imgs_arrays_rgb: list[np.ndarray]):
-        all_descriptors = []
+    def describe(self, imgs_arrays_rgb: list[np.ndarray]) -> list[np.ndarray]:
+        """Raw ORB descriptors, one (n_keypoints, 32) array per image."""
+        descriptors = []
         for img in imgs_arrays_rgb:
-            img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-            _, descriptors = self.orb.detectAndCompute(img, None)
-            all_descriptors.append(descriptors)
+            gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+            _, described = self.orb.detectAndCompute(gray, None)
+            descriptors.append(described)
+        return descriptors
 
-        return all_descriptors
-    
-    def fit(self):
-        pass
+    def get_features(self, imgs_arrays_rgb: list[np.ndarray]) -> list[list[int]]:
+        if self.kmeans is None:
+            raise RuntimeError(
+                "OrbFeatureExtractor has no vocabulary; call fit() on the corpus first, "
+                "or mark its channel is_trainable so the engine does")
+
+        # the centroids were fitted in float32; sklearn would promote uint8 to
+        # float64 and refuse the mismatch
+        return [[] if described is None
+                else self.kmeans.predict(described.astype(np.float32)).tolist()
+                for described in self.describe(imgs_arrays_rgb)]
+
+    def fit(self, dataloader: DataLoader) -> None:
+        """Cluster the corpus's descriptors into the visual vocabulary."""
+        from sklearn.cluster import MiniBatchKMeans
+
+        pool = []
+        collected = 0
+        for images, _ in dataloader:
+            for described in self.describe(images):
+                if described is None:
+                    continue
+                pool.append(described)
+                collected += len(described)
+            if collected >= self.max_fit_descriptors:
+                break
+
+        if not pool:
+            raise RuntimeError("ORB found no keypoint anywhere in the fitting set")
+
+        descriptors = np.vstack(pool).astype(np.float32)
+        if len(descriptors) > self.max_fit_descriptors:
+            rng = np.random.default_rng(self.seed)
+            descriptors = descriptors[rng.choice(len(descriptors),
+                                                 self.max_fit_descriptors, replace=False)]
+
+        # more centroids than descriptors would leave empty words in the vocabulary
+        k = min(self.vocabulary_size, len(descriptors))
+        self.kmeans = MiniBatchKMeans(n_clusters=k, random_state=self.seed,
+                                      n_init="auto", batch_size=4096).fit(descriptors)
     
 
 class SIFTFeatureExtractor(FeatureExtractor):
