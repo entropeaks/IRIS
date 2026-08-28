@@ -29,12 +29,15 @@ from src.distances.index import BinaryStrategy, DenseIndex, SparseIndex, TFIDFSt
 from src.distances.kernels import (BhattacharyyaKernel, BinaryJaccardKernel,
                                    EuclidianDistanceKernel)
 from src.eval import ConfusionArray, Recall
-from src.extractors import DocTRTextExtractor, HSVExtractor, OrbFeatureExtractor
+from src.config import load_config
+from src.extractors import (DocTRTextExtractor, HSVExtractor, MockRun,
+                            OrbFeatureExtractor, SiameseDino)
 from src.feature_stores import InMemoryStore
 from src.rerankers import HSVReranker, ORBReranker
 from src.types import RetrievalChannel
 
 EXTRACTORS = {"hsv": HSVExtractor, "orb": OrbFeatureExtractor, "doctr": DocTRTextExtractor}
+# "siamese" is built separately: it needs a model config, and optionally weights
 KERNELS = {"bhattacharyya": BhattacharyyaKernel, "euclidean": EuclidianDistanceKernel,
            "jaccard": BinaryJaccardKernel}
 WEIGHTINGS = {"binary": BinaryStrategy, "tfidf": TFIDFStrategy}
@@ -59,6 +62,8 @@ class ChannelSpec:
     kernel: str = "bhattacharyya"
     weighting: str = "binary"
     weight: float = 1.0
+    config: str = None       # extractor: siamese -- path to the model config
+    checkpoint: str = None   # extractor: siamese -- weights to load, else the bare backbone
 
 
 @dataclass
@@ -92,13 +97,29 @@ class ExperimentConfig:
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
 
 
+def build_extractor(spec: ChannelSpec):
+    if spec.extractor != "siamese":
+        return EXTRACTORS[spec.extractor]()
+
+    if not spec.config:
+        raise ValueError("extractor: siamese needs a `config:` pointing at a model config")
+
+    # MockRun rather than a real one: an experiment should not open a W&B run per
+    # fold, and the config it would read from may well name a project
+    model = SiameseDino(load_config(spec.config), run=MockRun())
+    if spec.checkpoint:
+        model.load_state_dict(torch.load(spec.checkpoint, map_location=model.device))
+    model.eval()
+    return model
+
+
 def build_channel(spec: ChannelSpec) -> RetrievalChannel:
     kernel = KERNELS[spec.kernel]()
     if spec.index == "sparse":
         index = SparseIndex(kernel, WEIGHTINGS[spec.weighting]())
     else:
         index = DenseIndex(kernel)
-    return RetrievalChannel(EXTRACTORS[spec.extractor](), index, weight=spec.weight)
+    return RetrievalChannel(build_extractor(spec), index, weight=spec.weight)
 
 
 def build_engine(config: ExperimentConfig, preprocessor: v2.Compose,

@@ -1,0 +1,22 @@
+# The frozen DINOv3 backbone as a retrieval channel.
+# `checkpoint:` points at trained weights; without it the bare backbone is used.
+name: siamese
+
+data:
+  path: /Users/timothee/Documents/programming/DIHT/data/cropped_data
+  k_folds: 4
+  seeds: [42, 43, 44]
+  gallery_instances: 1
+  n_query: 1
+  resize: 224
+  batch_size: 16
+
+channels:
+  - extractor: siamese
+    config: config/config.yaml
+    index: dense
+    kernel: euclidean
+    weight: 1.0
+
+smoothing_param: 10
+recall_k: [1, 3, 5]
