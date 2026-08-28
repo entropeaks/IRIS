@@ -1,0 +1,25 @@
+# Frozen backbone with ZCA whitening -- the strongest label-free recipe measured.
+# The whitening is fitted on each fold's train classes, never on the gallery.
+name: siamese+zca
+
+data:
+  path: /Users/timothee/Documents/programming/DIHT/data/cropped_data
+  k_folds: 4
+  seeds: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+  gallery_instances: 1
+  n_query: 1
+  resize: 224
+  batch_size: 16
+
+channels:
+  - extractor: siamese
+    config: config/config.yaml
+    whiten: true
+    whiten_eps_rel: 0.05
+    is_trainable: true
+    index: dense
+    kernel: euclidean
+    weight: 1.0
+
+smoothing_param: 10
+recall_k: [1, 3, 5]

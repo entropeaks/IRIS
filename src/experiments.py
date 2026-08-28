@@ -32,7 +32,7 @@ from src.eval import ConfusionArray, Recall
 from src.config import load_config
 from src.extractors import (BagOfVisualWords, DocTRTextExtractor, HSVExtractor,
                             MockRun, OrbFeatureExtractor, SIFTFeatureExtractor,
-                            SiameseDino)
+                            SiameseDino, Whitened)
 from src.feature_stores import InMemoryStore
 from src.rerankers import HSVReranker, ORBReranker
 from src.types import RetrievalChannel
@@ -66,7 +66,9 @@ class ChannelSpec:
     weighting: str = "binary"
     weight: float = 1.0
     is_trainable: bool = False  # fit the extractor on the fold's train split first
-    vocabulary_size: int = 256  # extractor: orb -- number of visual words
+    vocabulary_size: int = 256  # <name>-bovw -- number of visual words
+    whiten: bool = False        # equalise the descriptor covariance before indexing
+    whiten_eps_rel: float = 0.05
     config: str = None          # extractor: siamese -- path to the model config
     checkpoint: str = None      # extractor: siamese -- weights to load, else the bare backbone
 
@@ -103,6 +105,13 @@ class ExperimentConfig:
 
 
 def build_extractor(spec: ChannelSpec):
+    extractor = _base_extractor(spec)
+    if spec.whiten:
+        return Whitened(extractor, eps_rel=spec.whiten_eps_rel)
+    return extractor
+
+
+def _base_extractor(spec: ChannelSpec):
     if spec.extractor.endswith("-bovw"):
         base = EXTRACTORS[spec.extractor.removesuffix("-bovw")]()
         return BagOfVisualWords(base, vocabulary_size=spec.vocabulary_size)
