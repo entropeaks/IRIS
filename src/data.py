@@ -7,9 +7,13 @@ import torch
 from torch.utils.data import Dataset, Sampler
 from torchvision.transforms import v2
 from transformers.image_utils import load_image
-from typing import Tuple
+from typing import TYPE_CHECKING, Generator, List, Tuple
 import numpy as np
+from tqdm import tqdm
 from PIL import Image
+
+if TYPE_CHECKING:
+    from src.preprocess import Transform
 
 RANDOM_SEED = 42
 
@@ -35,6 +39,107 @@ def extract_paths_and_labels(directory: Path) -> Tuple[list, list]:
                 labels.append(int(class_dir.name))
 
     return paths, labels
+
+
+class Browser:
+    """Walks a class-per-directory dataset.
+
+    Overlaps `extract_paths_and_labels` above, which returns the same two lists;
+    this one adds iteration and a transformed-copy writer.
+    """
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.samples_num = self._get_samples_num()
+
+    def _get_samples_num(self) -> int:
+        count = 0
+        for _, _ in self._iterate_on_files():
+            count += 1
+        return count
+
+    def extract_paths_and_labels(self) -> Tuple[List[str], List[int]]:
+        paths = []
+        labels = []
+        for path, label in self._iterate_on_files():
+            paths.append(path.as_posix())
+            labels.append(int(label))
+
+        return paths, labels
+    
+    def _iterate_on_files(self) -> Generator[Tuple[Path, str], None, None]:
+        for class_dir in self._iterate_on_classes():
+            for path in class_dir.iterdir():
+                yield path, class_dir.name
+        
+    def _iterate_on_classes(self) -> Generator[Path, None, None]:
+        for class_dir in self.path.iterdir():
+            if class_dir.is_dir():
+                yield class_dir
+
+    def _construct_filename(self, filename: str, n: int) -> str:
+        components = filename.split('.')
+        base_name = '.'.join(components[:-1])
+        extension = components[-1]
+        return base_name + f"_{str(n)}." + extension
+
+    def generate_transformed_dataset(self,
+                                     destination_path: str,
+                                     transform: "Transform",
+                                     multiplier: int=1
+                                     ) -> None:
+        destinationPath = Path(destination_path)
+        destinationPath.mkdir(exist_ok=True)
+        for class_dir in self._iterate_on_classes():
+            label = class_dir.name
+            destinationPath.joinpath(label).mkdir(exist_ok=True)
+        
+        for path, label in tqdm(self._iterate_on_files(), total=self.samples_num):
+            src_img = Image.open(path.as_posix())
+            for i in range(multiplier):
+                filename = self._construct_filename(path.name, i)
+                if destinationPath.joinpath(label).joinpath(filename).exists():
+                    continue
+                new_img = transform.get_transformed(src_img)
+                new_img.save(destinationPath.joinpath(label).joinpath(filename))
+
+    """ def sample_k_per_class(self, k: int, random_state: int=RANDOM_SEED) -> Tuple[List, List]:
+        paths = []
+        labels = []
+        for class_dir in self._iterate_on_classes():
+            class_paths = [path.as_posix() for path in class_dir.iterdir()]
+            class_path = random.sample(class_paths, k)
+            paths.extend(class_path)
+            labels.extend([int(class_dir.name)]*len(class_path))
+
+        return paths, labels """
+    
+    def sample_leave_k_out(self, k: int):
+
+        gallery_paths, gallery_labels = [], []
+        query_paths, query_labels = [], []
+
+        for class_dir in self._iterate_on_classes():
+            class_paths = [p.as_posix() for p in class_dir.iterdir()]
+            n = len(class_paths)
+
+            if n <= k:
+                continue  # ou autre politique explicite
+
+            n_gallery = n - k
+            gallery_indices = set(random.sample(range(n), n_gallery))
+
+            to_gallery = [class_paths[i] for i in sorted(gallery_indices)]
+            left_out = [p for i, p in enumerate(class_paths) if i not in gallery_indices]
+
+            label = int(class_dir.name)
+
+            gallery_paths.extend(to_gallery)
+            gallery_labels.extend([label] * len(to_gallery))
+            query_paths.extend(left_out)
+            query_labels.extend([label] * len(left_out))
+
+        return gallery_paths, gallery_labels, query_paths, query_labels
 
 
 class DataPreparator():
