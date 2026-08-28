@@ -1,5 +1,5 @@
-# The same channel, with colour reranking the shortlist it already produced.
-name: hsv-reranked
+# Does colour fail on different queries than local geometry does?
+name: sift+hsv
 
 data:
   path: /Users/timothee/Documents/programming/DIHT/data/cropped_data
@@ -10,14 +10,17 @@ data:
   resize: 224
 
 channels:
+  - extractor: sift-bovw
+    index: sparse
+    kernel: jaccard
+    weighting: tfidf
+    vocabulary_size: 256
+    is_trainable: true
+    weight: 1.0
   - extractor: hsv
     index: dense
     kernel: bhattacharyya
     weight: 1.0
-
-reranker:
-  type: hsv
-  top_k_candidates: 10
 
 smoothing_param: 10
 recall_k: [1, 3, 5]

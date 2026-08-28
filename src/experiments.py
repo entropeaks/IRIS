@@ -30,14 +30,17 @@ from src.distances.kernels import (BhattacharyyaKernel, BinaryJaccardKernel,
                                    EuclidianDistanceKernel)
 from src.eval import ConfusionArray, Recall
 from src.config import load_config
-from src.extractors import (DocTRTextExtractor, HSVExtractor, MockRun,
-                            OrbFeatureExtractor, SiameseDino)
+from src.extractors import (BagOfVisualWords, DocTRTextExtractor, HSVExtractor,
+                            MockRun, OrbFeatureExtractor, SIFTFeatureExtractor,
+                            SiameseDino, Whitened)
 from src.feature_stores import InMemoryStore
 from src.rerankers import HSVReranker, ORBReranker
 from src.types import RetrievalChannel
 
-EXTRACTORS = {"hsv": HSVExtractor, "orb": OrbFeatureExtractor, "doctr": DocTRTextExtractor}
-# "siamese" is built separately: it needs a model config, and optionally weights
+EXTRACTORS = {"hsv": HSVExtractor, "orb": OrbFeatureExtractor,
+              "sift": SIFTFeatureExtractor, "doctr": DocTRTextExtractor}
+# "<name>-bovw" wraps a raw extractor in a visual vocabulary;
+# "siamese" is built separately, needing a model config and optionally weights
 KERNELS = {"bhattacharyya": BhattacharyyaKernel, "euclidean": EuclidianDistanceKernel,
            "jaccard": BinaryJaccardKernel}
 WEIGHTINGS = {"binary": BinaryStrategy, "tfidf": TFIDFStrategy}
@@ -62,8 +65,12 @@ class ChannelSpec:
     kernel: str = "bhattacharyya"
     weighting: str = "binary"
     weight: float = 1.0
-    config: str = None       # extractor: siamese -- path to the model config
-    checkpoint: str = None   # extractor: siamese -- weights to load, else the bare backbone
+    is_trainable: bool = False  # fit the extractor on the fold's train split first
+    vocabulary_size: int = 256  # <name>-bovw -- number of visual words
+    whiten: bool = False        # equalise the descriptor covariance before indexing
+    whiten_eps_rel: float = 0.05
+    config: str = None          # extractor: siamese -- path to the model config
+    checkpoint: str = None      # extractor: siamese -- weights to load, else the bare backbone
 
 
 @dataclass
@@ -98,6 +105,16 @@ class ExperimentConfig:
 
 
 def build_extractor(spec: ChannelSpec):
+    extractor = _base_extractor(spec)
+    if spec.whiten:
+        return Whitened(extractor, eps_rel=spec.whiten_eps_rel)
+    return extractor
+
+
+def _base_extractor(spec: ChannelSpec):
+    if spec.extractor.endswith("-bovw"):
+        base = EXTRACTORS[spec.extractor.removesuffix("-bovw")]()
+        return BagOfVisualWords(base, vocabulary_size=spec.vocabulary_size)
     if spec.extractor != "siamese":
         return EXTRACTORS[spec.extractor]()
 
@@ -119,7 +136,8 @@ def build_channel(spec: ChannelSpec) -> RetrievalChannel:
         index = SparseIndex(kernel, WEIGHTINGS[spec.weighting]())
     else:
         index = DenseIndex(kernel)
-    return RetrievalChannel(build_extractor(spec), index, weight=spec.weight)
+    return RetrievalChannel(build_extractor(spec), index, weight=spec.weight,
+                            is_trainable=spec.is_trainable)
 
 
 def build_engine(config: ExperimentConfig, preprocessor: v2.Compose,
@@ -158,6 +176,7 @@ def run(config: ExperimentConfig, quiet: bool = True) -> list[dict]:
         for fold_index, fold in enumerate(folds):
             gallery_paths, gallery_labels = fold["gallery"]
             query_paths, query_labels = fold["val_query"]
+            train_paths, train_labels = fold["train"]
 
             loaders = [DataLoader(CachedCollection(paths, labels, preprocessor=preprocessor),
                                   batch_size=config.data.batch_size, collate_fn=collate)
@@ -167,6 +186,13 @@ def run(config: ExperimentConfig, quiet: bool = True) -> list[dict]:
             engine = build_engine(config, preprocessor, progress=not quiet)
             metrics = [Recall(recall_k=config.recall_k), ConfusionArray()]
             with contextlib.redirect_stdout(io.StringIO()) if quiet else contextlib.nullcontext():
+                if any(spec.is_trainable for spec in config.channels):
+                    # a vocabulary is fitted on the fold's train classes, never on
+                    # the gallery or the queries it will be scored against
+                    engine.fit(DataLoader(
+                        CachedCollection(train_paths, train_labels, preprocessor=preprocessor),
+                        batch_size=config.data.batch_size, collate_fn=collate))
+
                 # indexing runs on its own so its cost stays separate from querying
                 engine.prepare_gallery(loaders[0])
                 scores = engine.evaluate(loaders[0], loaders[1], metrics)
@@ -177,6 +203,7 @@ def run(config: ExperimentConfig, quiet: bool = True) -> list[dict]:
                 "seed": seed,
                 "fold": fold_index,
                 "gallery_size": len(gallery_paths),
+                "train_size": len(train_paths),
                 "n_queries": len(query_paths),
                 "recall": {str(k): scores[f"recall@{k}"] for k in config.recall_k},
                 "confusion": scores["confusion"],

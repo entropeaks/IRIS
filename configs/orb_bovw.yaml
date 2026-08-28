@@ -1,0 +1,23 @@
+# ORB keypoints quantised into a bag of visual words, indexed sparsely with TF-IDF.
+# The vocabulary is clustered on each fold's train classes, never on the gallery.
+name: orb-bovw
+
+data:
+  path: /Users/timothee/Documents/programming/DIHT/data/cropped_data
+  k_folds: 4
+  seeds: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+  gallery_instances: 1
+  n_query: 1
+  resize: 224
+
+channels:
+  - extractor: orb-bovw
+    index: sparse
+    kernel: jaccard
+    weighting: tfidf
+    vocabulary_size: 256
+    is_trainable: true
+    weight: 1.0
+
+smoothing_param: 10
+recall_k: [1, 3, 5]

@@ -1,6 +1,6 @@
-# The frozen DINOv3 backbone as a retrieval channel.
-# `checkpoint:` points at trained weights; without it the bare backbone is used.
-name: siamese
+# Frozen backbone with ZCA whitening -- the strongest label-free recipe measured.
+# The whitening is fitted on each fold's train classes, never on the gallery.
+name: siamese+zca
 
 data:
   path: /Users/timothee/Documents/programming/DIHT/data/cropped_data
@@ -14,6 +14,9 @@ data:
 channels:
   - extractor: siamese
     config: config/config.yaml
+    whiten: true
+    whiten_eps_rel: 0.05
+    is_trainable: true
     index: dense
     kernel: euclidean
     weight: 1.0
