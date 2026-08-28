@@ -54,7 +54,8 @@ class SearchEngine(Instrumented):
         reranker: Reranker=None,
         top_k_candidates: int=50,
         time_it: bool=True,
-        evaluate_energy_consumption: bool=True
+        evaluate_energy_consumption: bool=True,
+        progress: bool=True
     ):
         """
         Args:
@@ -73,6 +74,7 @@ class SearchEngine(Instrumented):
         self._reranker = reranker
         self._top_k_candidates = top_k_candidates
         self._gallery_dataset: Dataset = None
+        self._progress = progress
         self._gallery_prepared = False
 
 
@@ -88,7 +90,7 @@ class SearchEngine(Instrumented):
         self,
         gallery_dataloader: DataLoader,
         query_dataloader: DataLoader,
-        metric: Metric
+        metric: Metric | list[Metric]
     ) -> Score:
         """
         Évalue le modèle sur gallery et query.
@@ -111,26 +113,35 @@ class SearchEngine(Instrumented):
         query_features, query_labels = self._compute_features(query_dataloader, update_index=False)
         query_labels = torch.tensor(query_labels)
         
+        metrics = metric if isinstance(metric, (list, tuple)) else [metric]
+
         distances = self._compute_distances(query_features)
-        scores = metric.compute(torch.from_numpy(distances),
-                                query_labels,
-                                gallery_labels)
+        scores = self._measure(metrics, distances, query_labels, gallery_labels)
         
         if self._reranker:
             print(f"Scores before reranking:\n{scores}")
             query_dataset = self._extract_dataset_from_dataloader(query_dataloader)
             new_distances = self._rerank(query_dataset, distances)
-            scores = metric.compute(
-                torch.from_numpy(new_distances),
-                query_labels,
-                gallery_labels
-            )
+            scores = self._measure(metrics, new_distances, query_labels, gallery_labels)
 
             print(f"Scores after reranking:\n{scores}")
         
         return scores
     
     
+    @staticmethod
+    def _measure(metrics, distances, query_labels, gallery_labels) -> dict:
+        """Merge every metric's output. Several can share one distance matrix,
+        and recomputing it per metric would cost more than the metrics do."""
+        dists = torch.from_numpy(np.asarray(distances, dtype=float))
+        scores = {}
+        for m in metrics:
+            scores.update(m.compute(dists, query_labels, gallery_labels))
+        return scores
+
+
+    @with_energy_consumption
+    @timed
     def prepare_gallery(self, gallery_dataloader: DataLoader):
         """Make this dataloader the gallery, replacing whatever was indexed before.
 
@@ -175,7 +186,8 @@ class SearchEngine(Instrumented):
         features_blocks = [[] for _ in self._channels]
         labels = []
 
-        for batch_imgs, batch_labels in tqdm(dataloader, desc="Computing features"):
+        for batch_imgs, batch_labels in tqdm(dataloader, desc="Computing features",
+                                             disable=not self._progress):
             labels.extend(batch_labels)
             for block, batch_features in zip(features_blocks, self._extract(batch_imgs)):
                 block.extend(batch_features)

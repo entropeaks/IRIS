@@ -1,0 +1,19 @@
+# Colour alone. The weakest channel, useful as a floor to compare against.
+name: hsv
+
+data:
+  path: /Users/timothee/Documents/programming/DIHT/data/cropped_data
+  k_folds: 4
+  seeds: [42, 43, 44]
+  gallery_instances: 1
+  n_query: 1
+  resize: 224
+
+channels:
+  - extractor: hsv
+    index: dense
+    kernel: bhattacharyya
+    weight: 1.0
+
+smoothing_param: 10
+recall_k: [1, 3, 5]

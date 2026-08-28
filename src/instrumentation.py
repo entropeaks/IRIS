@@ -12,7 +12,7 @@ def timed(func):
             t2 = time.time()
             elapsed = t2-t1
             print(f"Elapsed time for {func.__name__} = {elapsed:.2f}s")
-            self.update_time((elapsed))
+            self.record_time(func.__name__, elapsed)
         else:
             result = func(self, *args, **kwargs)
         
@@ -52,8 +52,8 @@ def with_energy_consumption(func):
         if measurement is not None:
             print(f"Energy consumption for {func.__name__} = {measurement.energy_consumed:.6f} kWh")
             print(f"Carbon footprint for {func.__name__} = {measurement.emissions:.6f} g.eq.CO2")
-            self.update_carbon(measurement.emissions)
-            self.update_energy(measurement.energy_consumed)
+            self.record_energy(func.__name__, measurement.energy_consumed,
+                               measurement.emissions)
 
         return result
 
@@ -61,16 +61,18 @@ def with_energy_consumption(func):
 
 
 class Instrumented:
-    """Accumulates what an operation cost: wall time, energy, carbon.
+    """Records what each stage cost: wall time, energy, carbon.
 
     The object half of the `timed` and `with_energy_consumption` decorators,
-    which need `_time_it`, `_evaluate_energy_consumption` and the update
-    methods. Mix it into anything whose cost is worth reporting; it says
-    nothing about what that thing does.
+    which need `_time_it` and `_evaluate_energy_consumption`. Mix it into
+    anything whose cost is worth reporting; it says nothing about what that
+    thing does.
 
-    `time`, `energy` and `carbon` hold the last measured call, `total_*` the
-    running sum -- read the right one, a report that prints `time` after a loop
-    sees only the final iteration.
+    Costs are keyed by the method that spent them, because a single running
+    total cannot answer "how long does indexing take" once several stages are
+    instrumented. Nested stages are inclusive: a method that calls another
+    counts the callee's time inside its own. Call them separately when you want
+    the two apart.
     """
 
     def __init__(self,
@@ -79,23 +81,24 @@ class Instrumented:
                  ):
         self._time_it = time_it
         self._evaluate_energy_consumption = evaluate_energy_consumption
-        self.time = None
-        self.energy = None
-        self.carbon = None
-        self.total_time = 0
-        self.total_energy = 0
-        self.total_carbon = 0
+        self.costs: dict[str, dict] = {}
 
+    def _stage(self, name: str) -> dict:
+        return self.costs.setdefault(name, {"calls": 0, "seconds": 0.0,
+                                            "kwh": 0.0, "co2_g": 0.0})
 
-    def update_time(self, time: int):
-        self.time = time
-        self.total_time += time
+    def record_time(self, stage: str, seconds: float) -> None:
+        entry = self._stage(stage)
+        entry["calls"] += 1
+        entry["seconds"] += seconds
 
-    def update_energy(self, energy: float):
-        self.energy = energy
-        self.total_energy += energy
+    def record_energy(self, stage: str, kwh: float, co2_g: float) -> None:
+        entry = self._stage(stage)
+        entry["kwh"] += kwh
+        entry["co2_g"] += co2_g
 
-    def update_carbon(self, carbon: float):
-        self.carbon = carbon
-        self.total_carbon += carbon
-
+    def cost_report(self) -> dict:
+        """Per-stage totals plus a mean per call, ready to be written out."""
+        return {stage: {**values,
+                        "seconds_per_call": values["seconds"] / max(values["calls"], 1)}
+                for stage, values in self.costs.items()}
