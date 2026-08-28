@@ -4,7 +4,7 @@ name: hsv-reranked
 data:
   path: /Users/timothee/Documents/programming/DIHT/data/cropped_data
   k_folds: 4
-  seeds: [42, 43, 44]
+  seeds: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
   gallery_instances: 1
   n_query: 1
   resize: 224

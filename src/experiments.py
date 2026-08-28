@@ -30,14 +30,17 @@ from src.distances.kernels import (BhattacharyyaKernel, BinaryJaccardKernel,
                                    EuclidianDistanceKernel)
 from src.eval import ConfusionArray, Recall
 from src.config import load_config
-from src.extractors import (DocTRTextExtractor, HSVExtractor, MockRun,
-                            OrbFeatureExtractor, SiameseDino)
+from src.extractors import (BagOfVisualWords, DocTRTextExtractor, HSVExtractor,
+                            MockRun, OrbFeatureExtractor, SIFTFeatureExtractor,
+                            SiameseDino)
 from src.feature_stores import InMemoryStore
 from src.rerankers import HSVReranker, ORBReranker
 from src.types import RetrievalChannel
 
-EXTRACTORS = {"hsv": HSVExtractor, "orb": OrbFeatureExtractor, "doctr": DocTRTextExtractor}
-# "siamese" is built separately: it needs a model config, and optionally weights
+EXTRACTORS = {"hsv": HSVExtractor, "orb": OrbFeatureExtractor,
+              "sift": SIFTFeatureExtractor, "doctr": DocTRTextExtractor}
+# "<name>-bovw" wraps a raw extractor in a visual vocabulary;
+# "siamese" is built separately, needing a model config and optionally weights
 KERNELS = {"bhattacharyya": BhattacharyyaKernel, "euclidean": EuclidianDistanceKernel,
            "jaccard": BinaryJaccardKernel}
 WEIGHTINGS = {"binary": BinaryStrategy, "tfidf": TFIDFStrategy}
@@ -100,8 +103,9 @@ class ExperimentConfig:
 
 
 def build_extractor(spec: ChannelSpec):
-    if spec.extractor == "orb":
-        return OrbFeatureExtractor(vocabulary_size=spec.vocabulary_size)
+    if spec.extractor.endswith("-bovw"):
+        base = EXTRACTORS[spec.extractor.removesuffix("-bovw")]()
+        return BagOfVisualWords(base, vocabulary_size=spec.vocabulary_size)
     if spec.extractor != "siamese":
         return EXTRACTORS[spec.extractor]()
 
