@@ -59,7 +59,7 @@ stack-data==0.6.3
 sympy==1.14.0
 threadpoolctl==3.6.0
 tokenizers==0.22.0
-torch==2.8.0
+torch==2.13.0
 torchao==0.13.0
 torchvision==0.23.0
 tornado==6.5.2
