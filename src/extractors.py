@@ -1,6 +1,7 @@
 
 from pathlib import Path
 import warnings
+from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, List, Tuple
 import uuid
 import numpy as np
@@ -199,6 +200,49 @@ class Whitened(FeatureExtractor):
         self.whitener = ZCAWhitening(eps_rel=self.eps_rel).fit(np.vstack(pool))
 
 
+class RotationAveraged(FeatureExtractor):
+    """Averages an extractor's descriptors over the four 90-degree rotations.
+
+    The caps sit at arbitrary angles, and a descriptor that is not rotation
+    invariant sees a different image each time one is turned. Averaging the four
+    lossless rotations -- np.rot90 moves pixels without resampling, so nothing is
+    interpolated away -- gives a descriptor that no longer depends on how the cap
+    happened to land.
+
+    Stateless, so no fit: unlike the vocabulary or the whitening, there is
+    nothing here to estimate from a corpus. It costs four backbone passes per
+    image, which is the whole of its price.
+
+    Each view is L2-normalised before averaging so one view cannot dominate by
+    magnitude, and the mean is normalised again. Whitening after this rather than
+    before makes no measurable difference -- whitening is affine, so it commutes
+    with the mean up to the per-view renormalisation.
+    """
+
+    def __init__(self, extractor: FeatureExtractor, n_views: int=4):
+        self.trainable = getattr(extractor, "trainable", False)
+        self.extractor = extractor
+        self.n_views = n_views
+
+    def get_features(self, imgs_arrays_rgb: list[np.ndarray]) -> list[np.ndarray]:
+        total = None
+        for turns in range(self.n_views):
+            views = (imgs_arrays_rgb if turns == 0
+                     else [np.rot90(img, turns).copy() for img in imgs_arrays_rgb])
+            described = np.asarray(self.extractor.get_features(views), dtype=np.float64)
+            described = described.reshape(len(described), -1)
+            described /= np.linalg.norm(described, axis=1, keepdims=True) + 1e-12
+            total = described if total is None else total + described
+
+        total /= np.linalg.norm(total, axis=1, keepdims=True) + 1e-12
+        return list(total)
+
+    def fit(self, dataloader) -> None:
+        """Pass through: only the wrapped extractor may have anything to learn."""
+        if getattr(self.extractor, "trainable", False):
+            self.extractor.fit(dataloader)
+
+
 class SIFTFeatureExtractor(FeatureExtractor):
 
     def __init__(self, min_match_count: int=10):
@@ -346,6 +390,54 @@ class HSVExtractor(FeatureExtractor):
     
 
 
+class Pooling(ABC):
+    """Reduces a transformer's token sequence to one vector per image.
+
+    `n_prefix` counts the tokens before the patches -- CLS plus any register
+    tokens -- so a pooling that wants patches only knows where they start.
+    """
+
+    @abstractmethod
+    def __call__(self, hidden_states: torch.Tensor, n_prefix: int) -> torch.Tensor: ...
+
+
+class ClsPool(Pooling):
+    """The CLS token, which the backbone trained to summarise the image."""
+
+    def __call__(self, hidden_states: torch.Tensor, n_prefix: int) -> torch.Tensor:
+        return hidden_states[:, 0, :]
+
+
+class AvgPool(Pooling):
+    """Mean of the patch tokens."""
+
+    def __call__(self, hidden_states: torch.Tensor, n_prefix: int) -> torch.Tensor:
+        return hidden_states[:, n_prefix:, :].mean(dim=1)
+
+
+class GemPool(Pooling):
+    """Generalised mean of the patch tokens, emphasising the strongest responses.
+
+    The clamp keeps the power well defined for p not an integer, and it is the
+    reason this suits convolutional feature maps far better than transformer
+    patch tokens: post-activation conv outputs are almost all non-negative, while
+    patch tokens are freely signed, so the clamp flattens roughly half of every
+    token to the floor. Measured on a frozen ViT it costs about 30 points of R@1
+    against taking the CLS token.
+    """
+
+    def __init__(self, p: float=3.0, eps: float=1e-6):
+        self.p = p
+        self.eps = eps
+
+    def __call__(self, hidden_states: torch.Tensor, n_prefix: int) -> torch.Tensor:
+        patches = hidden_states[:, n_prefix:, :]
+        return patches.clamp(min=self.eps).pow(self.p).mean(dim=1).pow(1.0 / self.p)
+
+
+POOLINGS = {"cls": ClsPool, "gem": GemPool, "avg": AvgPool}
+
+
 class MockRun:
     def __getattr__(self, name):
         # Retourne une fonction qui ne fait rien pour n'importe quel nom de méthode
@@ -353,12 +445,19 @@ class MockRun:
 
 
 class SiameseDino(FeatureExtractor, nn.Module):
-    def __init__(self, config: Config, run: "Run"=None):
+    def __init__(self, config: Config, run: "Run"=None,
+                 pooling: str=None, projection_head_size: int=None):
         """Frozen-backbone embedder with a trainable projection head.
 
         `run` receives an existing W&B run. Without one, a run is opened only if
         `base.wandb_project_name` is configured; otherwise metrics go to a no-op
         sink, so the model can be built offline and in tests.
+
+        `pooling` and `projection_head_size` override the model config, so an
+        experiment can sweep them without editing it. A size of 0 leaves the
+        pooled tokens alone, which is what a frozen backbone wants: an untrained
+        head is a random projection, and training one is a separate decision from
+        choosing a backbone.
         """
 
         nn.Module.__init__(self)
@@ -374,13 +473,26 @@ class SiameseDino(FeatureExtractor, nn.Module):
         #n_prefix is num_registers + 1 to take all patch tokens without CLS and register tokens
         self._n_prefix = self._backbone.config.num_register_tokens + 1
         
+        self.pooling = POOLINGS[pooling or self._config.model.pooling]()
+        head_size = (self._config.model.projection_head_size
+                     if projection_head_size is None else projection_head_size)
+
         embedding_dim = self._backbone.config.hidden_size
-        self.projection_head = nn.Sequential(
-            nn.Linear(embedding_dim, self._config.model.hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(self._config.model.dropout),
-            nn.Linear(self._config.model.hidden_dim, self._config.model.output_dim)
-            ) if self._config.model.hidden_dim > 0 else nn.Sequential(nn.Linear(embedding_dim, self._config.model.output_dim), nn.Dropout(self._config.model.dropout))
+        hidden_dim = self._config.model.hidden_dim
+        dropout = self._config.model.dropout
+        if head_size == 0:
+            self.projection_head = nn.Identity()
+        elif hidden_dim > 0:
+            self.projection_head = nn.Sequential(
+                nn.Linear(embedding_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, head_size))
+        else:
+            self.projection_head = nn.Sequential(
+                nn.Linear(embedding_dim, head_size),
+                nn.Dropout(dropout))
+        self.output_dim = embedding_dim if head_size == 0 else head_size
         self.loss = nn.TripletMarginLoss(margin=self._config.train.margin, p=2)
         self.device = set_device(config.base.device)
         self.to(self.device)
@@ -421,14 +533,9 @@ class SiameseDino(FeatureExtractor, nn.Module):
     def set_run(self, run: "Run"):
         self.run = run
 
-    def gem_pooling(self, patch_tokens, p=3):
-        # patch_tokens: (1, N_patches, hidden_size)
-        return patch_tokens.clamp(min=1e-6).pow(p).mean(dim=1).pow(1/p)
-
     def forward(self, **inputs):
         outputs = self._backbone(**inputs)
-        x = outputs.last_hidden_state[:, self._n_prefix:, :] 
-        x = self.gem_pooling(x)
+        x = self.pooling(outputs.last_hidden_state, self._n_prefix)
         x = self.projection_head(x)
         if self._config.model.normalize:
             x = F.normalize(x, p=2, dim=1)

@@ -1,7 +1,7 @@
 base:
   device: "gpu"
-  wandb_project_name: "my_project_name"
-  wandb_entity: "my_entity"
+  wandb_project_name: "IRIS-notebooks"
+  wandb_entity: "entropeaks-universit-paul-sabatier-toulouse-iii"
 
 dataset:
   original_dataset_path: "my_original_data_path"
@@ -14,7 +14,7 @@ eval:
   test_size: 0.1
 
 model:
-  backbone_name: "facebook/dinov3-vitb16-pretrain-lvd1689m"
+  backbone_name: "facebook/dinov3-vits16-pretrain-lvd1689m"
   pooling: "gem"              # cls | gem | avg
   hidden_dim: 0
   projection_head_size: 128   # 0 drops the head entirely
@@ -22,7 +22,7 @@ model:
   dropout: 0
 
 train:
-  epochs: 20
+  epochs: 10
   head_lr: 0.0005
   backbone_lr: 0.00005
   weight_decay: 0.0001
@@ -30,5 +30,5 @@ train:
   sampler_P: 16
   sampler_K: 8
   resize:
-    height: 224
-    width: 224
+    height: 448
+    width: 448

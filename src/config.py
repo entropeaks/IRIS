@@ -8,8 +8,9 @@ class ImgResize:
 @dataclass
 class ModelConfig:
     backbone_name: str="facebook/dinov3-vitb16-pretrain-lvd1689m"
-    hidden_dim: int=0
-    output_dim: int=128
+    pooling: str="gem"              # cls | gem | avg
+    hidden_dim: int=0               # 0 keeps the head a single layer
+    projection_head_size: int=128   # 0 drops the head, leaving the pooled tokens
     normalize: bool=True
     dropout: float=0.0
 

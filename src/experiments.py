@@ -32,7 +32,7 @@ from src.eval import ConfusionArray, Recall
 from src.config import load_config
 from src.extractors import (BagOfVisualWords, DocTRTextExtractor, HSVExtractor,
                             MockRun, OrbFeatureExtractor, SIFTFeatureExtractor,
-                            SiameseDino, Whitened)
+                            RotationAveraged, SiameseDino, Whitened)
 from src.feature_stores import InMemoryStore
 from src.rerankers import HSVReranker, ORBReranker
 from src.types import RetrievalChannel
@@ -69,6 +69,9 @@ class ChannelSpec:
     vocabulary_size: int = 256  # <name>-bovw -- number of visual words
     whiten: bool = False        # equalise the descriptor covariance before indexing
     whiten_eps_rel: float = 0.05
+    rotation_tta: bool = False  # average over the four 90-degree rotations
+    pooling: str = None         # extractor: siamese -- cls | gem | avg, else the model config's
+    projection_head_size: int = None  # extractor: siamese -- 0 drops the head
     config: str = None          # extractor: siamese -- path to the model config
     checkpoint: str = None      # extractor: siamese -- weights to load, else the bare backbone
 
@@ -105,9 +108,17 @@ class ExperimentConfig:
 
 
 def build_extractor(spec: ChannelSpec):
+    """Wrap the base extractor in whatever the spec asks for, innermost first.
+
+    Rotation averaging sits below the whitening: the whitening is then fitted on
+    the descriptors it will actually transform, rather than on single views it
+    never sees again.
+    """
     extractor = _base_extractor(spec)
+    if spec.rotation_tta:
+        extractor = RotationAveraged(extractor)
     if spec.whiten:
-        return Whitened(extractor, eps_rel=spec.whiten_eps_rel)
+        extractor = Whitened(extractor, eps_rel=spec.whiten_eps_rel)
     return extractor
 
 
@@ -123,7 +134,9 @@ def _base_extractor(spec: ChannelSpec):
 
     # MockRun rather than a real one: an experiment should not open a W&B run per
     # fold, and the config it would read from may well name a project
-    model = SiameseDino(load_config(spec.config), run=MockRun())
+    model = SiameseDino(load_config(spec.config), run=MockRun(),
+                        pooling=spec.pooling,
+                        projection_head_size=spec.projection_head_size)
     if spec.checkpoint:
         model.load_state_dict(torch.load(spec.checkpoint, map_location=model.device))
     model.eval()
