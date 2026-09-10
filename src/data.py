@@ -1,14 +1,21 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
 import random
+import warnings
 from collections import defaultdict
-from typing import Union
 import torch
-from torch.utils.data import Dataset, Sampler, DataLoader
+from torch.utils.data import Dataset, Sampler
 from torchvision.transforms import v2
 from transformers.image_utils import load_image
-from typing import Tuple
+from typing import TYPE_CHECKING, Generator, List, Tuple
 import numpy as np
+from tqdm import tqdm
+from PIL import Image
+
+if TYPE_CHECKING:
+    from src.preprocess import Transform
+
+RANDOM_SEED = 42
 
 
 def make_transform(resize_size: int = 224):
@@ -21,44 +28,317 @@ def make_transform(resize_size: int = 224):
     )
     return v2.Compose([to_tensor, resize, to_float, normalize])
 
-#dirty hacky way to do stratified split
-def train_test_split(paths: list, labels: list, ratio: int, random_state: int=None) -> Tuple[list, list, list, list]:
-    paths = np.array(paths)
-    labels = np.array(labels)
-    random.seed(a=random_state)
-    n_classes = len(set(labels))
-    samples_per_class = int(len(labels)/n_classes)
-    train_indices = []
-    test_indices = []
-    split_size = int(samples_per_class*ratio)
-    for i in range(n_classes):
-        cursor = i*samples_per_class
-        split_idx = random.randint(0, samples_per_class-1)
-        for i in range(split_size):
-            test_indices.append(cursor+(split_idx + i) % samples_per_class)
-        for i in range(samples_per_class - split_size):
-            train_indices.append(cursor+(split_idx + split_size + i) % samples_per_class)
-    
-    return paths[train_indices].tolist(), paths[test_indices].tolist(), labels[train_indices].tolist(), labels[test_indices].tolist()
 
-
-def extractPaths(root_path: Path) -> Tuple[list[Path], list[int]]:
-    images_paths = []
+def extract_paths_and_labels(directory: Path) -> Tuple[list, list]:
+    paths = []
     labels = []
-    for label, class_dir in enumerate(root_path.iterdir()):
-            if class_dir.is_dir():
-                for image_path in class_dir.iterdir():
-                    images_paths.append(image_path.as_posix())
-                    labels.append(label)
+    for class_dir in directory.iterdir():
+        if class_dir.is_dir():
+            for img_path in class_dir.iterdir():
+                paths.append(img_path.as_posix())
+                labels.append(int(class_dir.name))
+
+    return paths, labels
+
+
+class Browser:
+    """Walks a class-per-directory dataset.
+
+    Overlaps `extract_paths_and_labels` above, which returns the same two lists;
+    this one adds iteration and a transformed-copy writer.
+    """
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.samples_num = self._get_samples_num()
+
+    def _get_samples_num(self) -> int:
+        count = 0
+        for _, _ in self._iterate_on_files():
+            count += 1
+        return count
+
+    def extract_paths_and_labels(self) -> Tuple[List[str], List[int]]:
+        paths = []
+        labels = []
+        for path, label in self._iterate_on_files():
+            paths.append(path.as_posix())
+            labels.append(int(label))
+
+        return paths, labels
     
-    return images_paths, labels
+    def _iterate_on_files(self) -> Generator[Tuple[Path, str], None, None]:
+        for class_dir in self._iterate_on_classes():
+            for path in class_dir.iterdir():
+                if not path.name.startswith('.'):
+                    yield path, class_dir.name
+        
+    def _iterate_on_classes(self) -> Generator[Path, None, None]:
+        for class_dir in self.path.iterdir():
+            if class_dir.is_dir():
+                yield class_dir
+
+    def _construct_filename(self, filename: str, n: int) -> str:
+        components = filename.split('.')
+        base_name = '.'.join(components[:-1])
+        extension = components[-1]
+        return base_name + f"_{str(n)}." + extension
+
+    def generate_transformed_dataset(self,
+                                     destination_path: str,
+                                     transform: "Transform",
+                                     multiplier: int=1
+                                     ) -> None:
+        destinationPath = Path(destination_path)
+        destinationPath.mkdir(exist_ok=True)
+        for class_dir in self._iterate_on_classes():
+            label = class_dir.name
+            destinationPath.joinpath(label).mkdir(exist_ok=True)
+        
+        for path, label in tqdm(self._iterate_on_files(), total=self.samples_num):
+            src_img = Image.open(path.as_posix())
+            for i in range(multiplier):
+                filename = self._construct_filename(path.name, i)
+                if destinationPath.joinpath(label).joinpath(filename).exists():
+                    continue
+                new_img = transform.get_transformed(src_img)
+                new_img.save(destinationPath.joinpath(label).joinpath(filename))
+
+    """ def sample_k_per_class(self, k: int, random_state: int=RANDOM_SEED) -> Tuple[List, List]:
+        paths = []
+        labels = []
+        for class_dir in self._iterate_on_classes():
+            class_paths = [path.as_posix() for path in class_dir.iterdir()]
+            class_path = random.sample(class_paths, k)
+            paths.extend(class_path)
+            labels.extend([int(class_dir.name)]*len(class_path))
+
+        return paths, labels """
+    
+    def sample_leave_k_out(self, k: int):
+
+        gallery_paths, gallery_labels = [], []
+        query_paths, query_labels = [], []
+
+        for class_dir in self._iterate_on_classes():
+            class_paths = [p.as_posix() for p in class_dir.iterdir()]
+            n = len(class_paths)
+
+            if n <= k:
+                continue  # ou autre politique explicite
+
+            n_gallery = n - k
+            gallery_indices = set(random.sample(range(n), n_gallery))
+
+            to_gallery = [class_paths[i] for i in sorted(gallery_indices)]
+            left_out = [p for i, p in enumerate(class_paths) if i not in gallery_indices]
+
+            label = int(class_dir.name)
+
+            gallery_paths.extend(to_gallery)
+            gallery_labels.extend([label] * len(to_gallery))
+            query_paths.extend(left_out)
+            query_labels.extend([label] * len(left_out))
+
+        return gallery_paths, gallery_labels, query_paths, query_labels
+
+
+class DataPreparator():
+
+    def __init__(self,
+                original_data_path: str,
+                augmented_data_path: str,
+                random_seed: int=RANDOM_SEED,
+                shuffle: bool=True
+                ):
+        self.original_data_path = Path(original_data_path)
+        self.augmented_data_path = Path(augmented_data_path)
+        self.random_seed = random_seed
+        self.classes = self._get_classes()
+        self.num_classes = len(self.classes)
+        if shuffle:
+            self._shuffle_classes()
+
+
+    def _get_classes(self):
+        if not self.original_data_path.exists():
+            raise FileNotFoundError(f"Original data directory not found at {self.original_data_path}")
+
+        all_classes = sorted([d.name for d in self.original_data_path.iterdir() if d.is_dir()])
+        num_classes = len(all_classes)
+
+        if num_classes == 0:
+            raise ValueError(f"No class folders found in {self.original_data_path}")
+
+        print(f"Found {num_classes} total classes.")
+        return all_classes
+
+
+    def _shuffle_classes(self) -> None:
+        random.seed(self.random_seed)
+        np.random.seed(self.random_seed)
+
+        shuffled_classes = np.random.permutation(self.classes)
+        self.classes = list(shuffled_classes)
+
+
+    def train_val_test_split(self, train_ratio: float, val_ratio: float, max_gallery_instances: int, n_query: int):
+        train_classes, val_classes, test_classes = self._get_tvt_splits(train_ratio, val_ratio)
+        splits = self._create_dataset_splits(train_classes, val_classes, test_classes, max_gallery_instances, n_query)
+
+        return splits
+    
+    
+    def _get_tvt_splits(self, train_ratio, val_ratio):
+        if train_ratio + val_ratio >= 1:
+            raise ValueError(
+                f"train_ratio + val_ratio must be < 1 to leave room for a test split "
+                f"(got {train_ratio} + {val_ratio} = {train_ratio + val_ratio})"
+            )
+
+        num_train = int(self.num_classes * train_ratio)
+        num_val = int(self.num_classes * val_ratio)
+        
+        # Ensure at least 1 class in each split if ratios are small
+        num_train = max(1, num_train)
+        num_val = max(1, num_val)
+        train_classes = set(self.classes[:num_train])
+        val_classes = set(self.classes[num_train : num_train + num_val])
+        test_classes = set(self.classes[num_train + num_val:])
+
+        return train_classes, val_classes, test_classes
+    
+
+    def _create_dataset_splits(
+        self,
+        train_classes: set,
+        val_classes: set,
+        test_classes: set,
+        max_gallery_instances: int,
+        k_query: int,
+    ):
+        """
+        Creates train, gallery, and query splits based on class-level separation.
+        """
+
+        random.seed(self.random_seed)
+        np.random.seed(self.random_seed)
+
+        
+        short_classes = 0
+        train_paths, train_labels = [], []
+        gallery_paths, gallery_labels = [], []
+        val_query_paths, val_query_labels = [], []
+        test_query_paths, test_query_labels = [], []
+
+
+        print("Processing Train classes...")
+        for class_name in sorted(train_classes):
+            
+            aug_class_dir = self.augmented_data_path / class_name
+            aug_images = [str(p) for p in aug_class_dir.glob('*.*') if not p.name.startswith('.')]
+            train_paths.extend(aug_images)
+            train_labels.extend([int(class_name)] * len(aug_images))
+            
+            orig_class_dir = self.original_data_path / class_name
+            orig_images = [str(p) for p in orig_class_dir.glob('*.*') if not p.name.startswith('.')]
+            random.shuffle(orig_images)
+            gallery_imgs = orig_images[:max_gallery_instances]
+            gallery_paths.extend(gallery_imgs)
+            gallery_labels.extend([int(class_name)] * len(gallery_imgs))
+
+        
+        print("Processing Validation classes...")
+        for class_name in sorted(val_classes):
+            orig_class_dir = self.original_data_path / class_name
+            all_class_images = [str(p) for p in orig_class_dir.glob('*.*') if not p.name.startswith('.')]
+            random.shuffle(all_class_images)
+            
+            query_imgs = all_class_images[:k_query]
+            val_query_paths.extend(query_imgs)
+            val_query_labels.extend([int(class_name)] * len(query_imgs))
+            short_classes += len(query_imgs) < k_query
+            
+            gallery_imgs = all_class_images[k_query : k_query + max_gallery_instances]
+            gallery_paths.extend(gallery_imgs)
+            gallery_labels.extend([int(class_name)] * len(gallery_imgs))
+
+        
+        print("Processing Test classes...")
+        for class_name in sorted(test_classes):
+            orig_class_dir = self.original_data_path / class_name
+            all_class_images = [str(p) for p in orig_class_dir.glob('*.*') if not p.name.startswith('.')]
+            random.shuffle(all_class_images)
+            
+            query_imgs = all_class_images[:k_query]
+            test_query_paths.extend(query_imgs)
+            test_query_labels.extend([int(class_name)] * len(query_imgs))
+            short_classes += len(query_imgs) < k_query
+            
+            gallery_imgs = all_class_images[k_query : k_query + max_gallery_instances]
+            gallery_paths.extend(gallery_imgs)
+            gallery_labels.extend([int(class_name)] * len(gallery_imgs))
+
+        if short_classes:
+            warnings.warn(f"{short_classes} class(es) hold fewer than k_query={k_query} images "
+                          f"and contribute fewer queries than requested",
+                          RuntimeWarning, stacklevel=2)
+
+        print("\n--- Data Split Summary ---")
+        print(f"Training Loader:   {len(train_paths):>5} samples from {len(train_classes)} classes (Augmented)")
+        print(f"Gallery Loader:    {len(gallery_paths):>5} samples from {self.num_classes} classes (Original)")
+        print(f"Val Query Loader:  {len(val_query_paths):>5} samples from {len(val_classes)} classes (Original)")
+        print(f"Test Query Loader: {len(test_query_paths):>5} samples from {len(test_classes)} classes (Original)")
+        
+
+        data_splits = {
+            "train": (train_paths, train_labels),
+            "gallery": (gallery_paths, gallery_labels),
+            "val_query": (val_query_paths, val_query_labels),
+            "test_query": (test_query_paths, test_query_labels)
+        }
+
+        return data_splits
+
+
+    def _get_k_fold_splits(self, split_num: int, val_ratio: float) -> Tuple[set, set]:
+        val_start_idx = int(split_num * val_ratio * self.num_classes)
+        val_stop_idx = int((split_num+1) * val_ratio * self.num_classes)
+        val_classes = set(self.classes[val_start_idx:val_stop_idx])
+        train_classes = set(self.classes).difference(val_classes)
+
+        return train_classes, val_classes
+
+
+    def get_k_folds(self,
+                    k: int,
+                    max_gallery_instances: int,
+                    n_query: int=1):
+        folds = []
+        val_ratio = 1/k
+        for split_num in range(k):
+            print(f"================ PROCESSING SPLIT {split_num} ================")
+            train_split, val_split = self._get_k_fold_splits(split_num, val_ratio)
+            fold = self._create_dataset_splits(train_split, val_split, set(), max_gallery_instances, n_query)
+            fold.pop("test_query")
+            folds.append(fold)
+            print("\n")
+
+        return folds
 
 
 class ImageCollectionDataset(ABC):
-    def __init__(self, images_paths: list[Path], labels: list[int], transform: v2.Compose=None):
+    def __init__(self,
+                 images_paths: list[Path],
+                 labels: list[int],
+                 preprocessor: v2.Compose=None,
+                 transform: v2.Compose=None):
+        
         self.images_paths = images_paths
         self.labels = labels
-        self.transform = transform if transform else make_transform()
+        self.preprocessor = preprocessor
+        self.transform = transform
+
         self.class_to_indices = defaultdict(list)
         for idx, label in enumerate(labels):
             self.class_to_indices[label].append(idx)
@@ -68,68 +348,68 @@ class ImageCollectionDataset(ABC):
         pass
 
     @abstractmethod
-    def __getitem__(self, idx: Union[int, list[int]]):
+    def __getitem__(self, idx: int):
         pass
 
 
 # ==== Dataset simple ====
 class CachedCollection(ImageCollectionDataset, Dataset):
-    def __init__(self, images_paths: list[Path], labels: list[int], transform: v2.Compose=None):
-        super().__init__(images_paths, labels, transform)
-        self.images_instances = self.load_images()
+    def __init__(self,
+                 images_paths: list[Path],
+                 labels: list[int],
+                 preprocessor: v2.Compose=None,
+                 transform: v2.Compose=None):
+        
+        super().__init__(images_paths, labels, preprocessor, transform)
+        self.images_instances = self._load_images()
 
-    def load_images(self) -> list:
+    def _load_images(self) -> list[Image.Image]:
         images_instances = []
         for path in self.images_paths:
-            images_instances.append(v2.Resize((224, 224))(load_image(path)))
+            img = load_image(path)
+            img = self.preprocessor(img)
+            images_instances.append(img)
         return images_instances
 
     def __len__(self):
         return len(self.images_instances)
 
-    def __getitem__(self, idx):
-        img = self.transform(self.images_instances[idx])
+    def __getitem__(self, idx) -> Tuple[np.ndarray, int]:
+        img = self.images_instances[idx]
+        if self.transform:
+            img = self.transform(img)
         label = self.labels[idx]
-        return img, label
+        return np.array(img), label
     
 
 class LazyLoadCollection(ImageCollectionDataset, Dataset):
-    def __init__(self, images_paths: list[Path], labels: list[int], transform: v2.Compose=None):
-        super().__init__(images_paths, labels, transform)
+    def __init__(self,
+                 images_paths: list[Path],
+                 labels: list[int],
+                 preprocessor: v2.Compose=None,
+                 transform: v2.Compose=None):
+        super().__init__(images_paths, labels, preprocessor, transform)
 
     def __len__(self):
         return len(self.images_paths)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx) -> Tuple[np.ndarray, int]:
         img = load_image(self.images_paths[idx])
+        img = self.preprocessor(img)
         if self.transform:
             img = self.transform(img)
         label = self.labels[idx]
-        return img, label
+        return np.array(img), label
     
 
 # ==== Sampler pour P classes × K images ====
 class PKSampler(Sampler):
-    def __init__(self, dataset, P, K):
+    def __init__(self, dataset: ImageCollectionDataset, P: int, K: int):
         self.P = P  # classes per batch
         self.K = K  # images per class
-
-        if hasattr(dataset, "indices"):
-            # dataset is a Subset
-            self.subset_indices = dataset.indices  # indices in the original dataset
-            self.dataset = dataset.dataset         # the original dataset
-            # Build class_to_indices for the subset (values are indices in the subset, not the original dataset)
-            self.class_to_indices = {}
-            for cls, orig_indices in self.dataset.class_to_indices.items():
-                # Find which indices are in the subset
-                subset_class_indices = [i for i, idx in enumerate(self.subset_indices) if idx in orig_indices]
-                if subset_class_indices:
-                    self.class_to_indices[cls] = subset_class_indices
-            self.classes = list(self.class_to_indices.keys())
-        else:
-            self.dataset = dataset
-            self.class_to_indices = self.dataset.class_to_indices
-            self.classes = list(self.class_to_indices.keys())
+        self.dataset = dataset
+        self.class_to_indices = self.dataset.class_to_indices
+        self.classes = list(self.class_to_indices.keys())
 
     def __iter__(self):
         for _ in range(len(self)):

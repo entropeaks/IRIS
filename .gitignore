@@ -8,8 +8,11 @@ data/
 *.pt
 *.pth
 notebooks/.ipynb_checkpoints/
+notebooks/draft.ipynb
 wandb/
 model_checkpoints/
+config/config.yaml
+outputs/
 
 __pycache__/
 *.py[cod]
@@ -23,3 +26,6 @@ venv/
 .idea/
 .vscode/
 archives/
+*/runs/
+
+REVIEW.md

@@ -1,0 +1,32 @@
+# GEM pooling, projection head, ZCA whitened.
+name: gem-head+zca+tta
+
+data:
+  path: /Users/timothee/Documents/programming/DIHT/data/original_data
+  k_folds: 4
+  seeds: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+  gallery_instances: 1
+  n_query: 1
+  resize: 224
+  batch_size: 16
+  # the only config here that trains, so the only one that needs its training
+  # batches to hold triplets. k matches the images per train class exactly (4):
+  # PKSampler wraps modulo, so a larger k would put an image in twice and hand
+  # the mining a positive at distance zero. Raise it alongside augmented_path.
+  sampler_p: 16
+  sampler_k: 4
+
+channels:
+  - extractor: siamese
+    config: config/config.yaml
+    pooling: gem
+    projection_head_size: 128
+    whiten: head_init
+    rotation_tta: true
+    is_trainable: true
+    index: dense
+    kernel: euclidean
+    weight: 1.0
+
+smoothing_param: 10
+recall_k: [1, 3, 5]

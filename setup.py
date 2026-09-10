@@ -9,17 +9,21 @@ setup(
     install_requires=[
         "torch",
         "torchvision",
+        "transformers",
         "tqdm",
         "numpy",
+        "scipy",
         "pandas",
         "scikit-learn",
         "pyyaml",
+        "dacite",
         "matplotlib",
+        "pillow",
+        "opencv-python",
+        "ultralytics",
+        "wandb",
+        "codecarbon",
+        "python-doctr",
     ],
     python_requires=">=3.9",
-    entry_points={
-        "console_scripts": [
-            "diht-train = scripts.train_and_eval:main",
-        ],
-    },
 )
