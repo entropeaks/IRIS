@@ -233,10 +233,9 @@ def average_over_rotations(describe, imgs_arrays_rgb: list[np.ndarray],
                            n_views: int=N_ROTATION_VIEWS) -> np.ndarray:
     """Average `describe`'s descriptors over the first `n_views` 90-degree rotations.
 
-    Free-standing rather than a method, because two callers need it on
-    different descriptors: `RotationAveraged` averages an extractor's output,
-    while `SiameseDino` averages its own pooled tokens to fit a head
-    initialisation on what the head will actually receive.
+    Free-standing rather than a method so `SiameseDino.pool_batch` can mirror
+    it on pooled tokens: the two must agree, since a channel may average above
+    the head or below it and the whitening's placement depends on which.
 
     Each view is L2-normalised before averaging so one view cannot dominate by
     magnitude, and the mean is normalised again.
@@ -480,7 +479,7 @@ class SiameseDino(FeatureExtractor, nn.Module):
     def __init__(self, config: Config, run: "Run"=None,
                  pooling: str=None, projection_head_size: int=None,
                  trainable: bool=False, whiten_head: bool=False,
-                 whiten_eps_rel: float=0.05, whiten_rotations: int=1):
+                 whiten_eps_rel: float=0.05, rotation_views: int=1):
         """Backbone embedder with a projection head, the backbone frozen by default.
 
         `run` receives an existing W&B run. Without one, a run is opened only if
@@ -504,6 +503,17 @@ class SiameseDino(FeatureExtractor, nn.Module):
         training asks whether training buys anything beyond it. Either implies
         a pass over a corpus, so `trainable` (what the engine consults) is the
         disjunction of the two.
+
+        `rotation_views` averages the pooled tokens over that many 90-degree
+        rotations before the head, instead of letting `RotationAveraged` wrap
+        the whole model. The distinction matters only when the head carries a
+        whitening: wrapped, the head sits inside the per-view loop, so each
+        view is whitened and the four are averaged afterwards -- which
+        amplifies each view's own noise before averaging can suppress it, and
+        leaves the whitening transforming single views though it was fitted on
+        averages. Averaging first puts the whitening back on the descriptor the
+        channel actually settles on. Measured on cls at 224px, wrapped scores
+        0.343 R@1 against 0.754 for the same whitening applied after averaging.
         """
 
         nn.Module.__init__(self)
@@ -546,7 +556,7 @@ class SiameseDino(FeatureExtractor, nn.Module):
         self._trains = trainable
         self._whiten_head = whiten_head
         self._whiten_eps_rel = whiten_eps_rel
-        self._whiten_rotations = whiten_rotations
+        self.rotation_views = rotation_views
         self.trainable = trainable or whiten_head
         self.gallery_labels = None
         self._name = f"siamese-{uuid.uuid4().hex[:6]}"
@@ -558,8 +568,8 @@ class SiameseDino(FeatureExtractor, nn.Module):
         self.optimizer = optimizer
 
 
-    def init_head_from_whitening(self, dataloader: DataLoader, eps_rel: float=0.05,
-                                 n_rotations: int=1) -> "ZCAWhitening":
+    def init_head_from_whitening(self, dataloader: DataLoader,
+                                 eps_rel: float=0.05) -> "ZCAWhitening":
         """Set the projection head to the whitening of the corpus's descriptors.
 
         Whitening after a trained head is the same correction twice: the head is
@@ -581,19 +591,15 @@ class SiameseDino(FeatureExtractor, nn.Module):
         makes fitting it first correct here, and what makes it wrong for a
         whitening sitting after the head.
 
-        `n_rotations` must match the channel's rotation averaging, so the
-        whitening sees the descriptors the head will actually be given rather
-        than single views the channel discards.
+        Fitted on `pooled_features`, which already averages over rotations when
+        the channel asked for them, so the whitening sees the descriptors the
+        head will actually be given rather than single views it never keeps.
         """
         from src.postprocess import ZCAWhitening
 
         linear = self._single_linear_head()
-        pool = []
-        for images, _ in dataloader:
-            if n_rotations > 1:
-                pool.append(average_over_rotations(self.pooled_features, images, n_rotations))
-            else:
-                pool.append(np.asarray(self.pooled_features(images), dtype=np.float64))
+        pool = [np.asarray(self.pooled_features(images), dtype=np.float64)
+                for images, _ in dataloader]
         if not pool:
             raise RuntimeError("nothing to fit the head initialisation on")
 
@@ -709,6 +715,28 @@ class SiameseDino(FeatureExtractor, nn.Module):
         """The pooled backbone tokens, before the projection head."""
         return self.pooling(self._backbone(**inputs).last_hidden_state, self._n_prefix)
 
+    def pool_batch(self, imgs_arrays_rgb: list[np.ndarray]) -> torch.Tensor:
+        """Pooled tokens for a batch of images, averaged over rotations if asked.
+
+        The single place the backbone is run, so the whitening fit, the
+        training epochs and the queries all describe an image the same way.
+        Mirrors `average_over_rotations` -- L2 per view, mean, L2 again -- on
+        pooled tokens rather than on finished descriptors, which is the whole
+        point: it puts the averaging below the head instead of above it.
+        """
+        if self.rotation_views <= 1:
+            inputs = self._processor(images=imgs_arrays_rgb, return_tensors="pt").to(self.device)
+            return self.pool(**inputs)
+
+        total = None
+        for turns in range(self.rotation_views):
+            views = (imgs_arrays_rgb if turns == 0
+                     else [np.rot90(np.asarray(img), turns).copy() for img in imgs_arrays_rgb])
+            inputs = self._processor(images=views, return_tensors="pt").to(self.device)
+            pooled = F.normalize(self.pool(**inputs), p=2, dim=1)
+            total = pooled if total is None else total + pooled
+        return F.normalize(total, p=2, dim=1)
+
     def head_forward(self, pooled: torch.Tensor) -> torch.Tensor:
         """The head applied to already-pooled tokens.
 
@@ -731,17 +759,13 @@ class SiameseDino(FeatureExtractor, nn.Module):
     
     @torch.no_grad
     def get_features(self, imgs_arrays_rgb: list[np.ndarray]):
-        inputs = self._processor(images=imgs_arrays_rgb, return_tensors="pt").to(self.device)
-        embeddings = self(**inputs)
-
-        return embeddings.cpu().numpy()
+        return self.head_forward(self.pool_batch(imgs_arrays_rgb)).cpu().numpy()
 
 
     @torch.no_grad
     def pooled_features(self, imgs_arrays_rgb: list[np.ndarray]) -> np.ndarray:
-        """Descriptors as the head receives them: pooled, unprojected, unnormalised."""
-        inputs = self._processor(images=imgs_arrays_rgb, return_tensors="pt").to(self.device)
-        return self.pool(**inputs).cpu().numpy()
+        """Descriptors as the head receives them: pooled, unprojected."""
+        return self.pool_batch(imgs_arrays_rgb).cpu().numpy()
 
 
     def fit(self, dataloader: DataLoader, corpus_dataloader: DataLoader=None) -> None:
@@ -753,8 +777,7 @@ class SiameseDino(FeatureExtractor, nn.Module):
         """
         if self._whiten_head:
             self.init_head_from_whitening(corpus_dataloader or dataloader,
-                                          eps_rel=self._whiten_eps_rel,
-                                          n_rotations=self._whiten_rotations)
+                                          eps_rel=self._whiten_eps_rel)
         if not self._trains:
             self.eval()
             return
@@ -786,11 +809,7 @@ class SiameseDino(FeatureExtractor, nn.Module):
         worse than no noise at all.
         """
         self._backbone.eval()
-        cached = []
-        for images, labels in dataloader:
-            inputs = self._processor(images=images, return_tensors="pt").to(self.device)
-            cached.append((self.pool(**inputs), labels))
-        return cached
+        return [(self.pool_batch(images), labels) for images, labels in dataloader]
 
 
     def _epoch_batches(self, dataloader: DataLoader, cache: list[tuple]=None):
@@ -801,8 +820,7 @@ class SiameseDino(FeatureExtractor, nn.Module):
             return
 
         for images, labels in dataloader:
-            inputs = self._processor(images=images, return_tensors="pt").to(self.device)
-            yield self(**inputs), labels
+            yield self.head_forward(self.pool_batch(images)), labels
 
 
     def fit_and_evaluate(self,

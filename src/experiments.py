@@ -47,7 +47,19 @@ KERNELS = {"bhattacharyya": BhattacharyyaKernel, "euclidean": EuclidianDistanceK
 WEIGHTINGS = {"binary": BinaryStrategy, "tfidf": TFIDFStrategy}
 RERANKERS = {"hsv": HSVReranker, "orb": ORBReranker}
 # where the whitening is applied: nowhere, on the descriptors an extractor hands
-# out, or folded into the projection head's initialisation
+# out, or folded into the projection head's initialisation.
+#
+# head_init has yet to win anything. At full rank it *is* post -- identical
+# fold for fold across both datasets, with and without rotation averaging -- and
+# its only reason to exist is to ask whether training the head beats starting it
+# at the whitening. Measured on cls at 224px over seg_gray, it does not: 0.912
+# R@1 frozen against 0.872 trained, degrading further as the learning rate
+# rises. Worse, the head start itself is absorbed. On 304 images it was worth
+# 6.8 points over a random head; on 1216 with a P x K sampler, 0.853 either way.
+# A linear preconditioner of a linear layer buys speed, not a better optimum,
+# so it pays exactly where training is least affordable. Kept because it is the
+# only way to ask the question again if the backbone, the loss or the scale
+# change.
 WHITEN_MODES = ("none", "post", "head_init")
 # which images a descriptor-only fit may see; labels never leave the train split
 FIT_CORPORA = ("train", "train+gallery", "all")
@@ -163,10 +175,13 @@ def build_extractor(spec: ChannelSpec):
     never sees again.
 
     `whiten: head_init` adds no wrapper at all -- the whitening lives inside the
-    model as its head's initialisation, which is the point of that mode.
+    model as its head's initialisation, and its rotation averaging goes with
+    it. Wrapping would put the head inside the per-view loop, so each view
+    would be whitened and the four averaged afterwards; the whitening belongs
+    on the descriptor the channel settles on, not on the views it discards.
     """
     extractor = _base_extractor(spec)
-    if spec.rotation_tta:
+    if spec.rotation_tta and spec.whiten != "head_init":
         extractor = RotationAveraged(extractor)
     if spec.whiten == "post":
         extractor = Whitened(extractor, eps_rel=spec.whiten_eps_rel)
@@ -191,9 +206,11 @@ def _base_extractor(spec: ChannelSpec):
                         trainable=spec.is_trainable,
                         whiten_head=spec.whiten == "head_init",
                         whiten_eps_rel=spec.whiten_eps_rel,
-                        # the head must be initialised on the descriptors the
-                        # channel will feed it, averaged views included
-                        whiten_rotations=N_ROTATION_VIEWS if spec.rotation_tta else 1)
+                        # head_init averages inside the model, below the head;
+                        # every other mode leaves it to the RotationAveraged wrapper
+                        rotation_views=(N_ROTATION_VIEWS
+                                        if spec.rotation_tta and spec.whiten == "head_init"
+                                        else 1))
     if spec.checkpoint:
         model.load_state_dict(torch.load(spec.checkpoint, map_location=model.device))
     model.eval()

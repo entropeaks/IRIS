@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from src.experiments import ChannelSpec, fit_corpus_split
+from src.experiments import ChannelSpec, build_extractor, fit_corpus_split
 from src.extractors import RotationAveraged, Whitened
 from src.postprocess import ZCAWhitening
 from src.types import FeatureExtractor
@@ -181,6 +181,35 @@ def test_incompatible_whitening_is_refused_not_dropped():
         pass
     else:
         raise AssertionError("an unknown whiten mode was accepted")
+
+
+def test_head_init_keeps_the_rotation_averaging_below_the_head():
+    """Wrapping a whitened head puts it inside the per-view loop.
+
+    Each view would then be whitened and the four averaged afterwards, which
+    amplifies each view's own noise before averaging can suppress it -- and
+    leaves the whitening transforming single views though it was fitted on
+    averages. Measured on cls at 224px: 0.343 R@1 wrapped, 0.754 averaged
+    first. So head_init must average inside the model, and must not be wrapped.
+    """
+    import src.experiments as harness
+
+    base = RecordingExtractor()
+    original = harness._base_extractor
+    harness._base_extractor = lambda spec: base
+    try:
+        post = harness.build_extractor(
+            ChannelSpec(extractor="hsv", whiten="post", kernel="euclidean",
+                        rotation_tta=True))
+        head_init = harness.build_extractor(
+            ChannelSpec(extractor="siamese", config="c.yaml", whiten="head_init",
+                        kernel="euclidean", rotation_tta=True))
+    finally:
+        harness._base_extractor = original
+
+    assert isinstance(post, Whitened) and isinstance(post.extractor, RotationAveraged)
+    # nothing wraps the model: it averages below its own head instead
+    assert head_init is base
 
 
 def test_fit_corpus_widens_without_ever_adding_labels_to_training():
