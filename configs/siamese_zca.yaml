@@ -14,9 +14,9 @@ data:
 channels:
   - extractor: siamese
     config: config/config.yaml
-    whiten: true
+    whiten: head_init
     whiten_eps_rel: 0.05
-    is_trainable: true
+    is_trainable: false
     index: dense
     kernel: euclidean
     weight: 1.0

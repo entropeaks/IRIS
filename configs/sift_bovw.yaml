@@ -16,7 +16,7 @@ channels:
     kernel: jaccard
     weighting: tfidf
     vocabulary_size: 256
-    is_trainable: true
+    is_trainable: false
     weight: 1.0
 
 smoothing_param: 10

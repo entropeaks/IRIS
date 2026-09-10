@@ -9,17 +9,28 @@ Matrix: TypeAlias = csr_matrix | ndarray
 Feature: TypeAlias = int | float | list[Any] | ndarray
 
 class FeatureExtractor(ABC):
+    """Turns images into descriptors, and optionally learns how from a corpus.
 
-    def __init__(self):
-        self.trainable: bool
+    `trainable` is a class attribute rather than something each subclass must
+    remember to set: an extractor with nothing to learn is the common case, and
+    an unset flag used to mean the engine skipped a `fit` the config had asked
+    for.
+    """
+
+    trainable: bool = False
 
     @abstractmethod
     def get_features(self, imgs_arrays_rgb: list[ndarray]) -> list[list[Feature]]:
         pass
 
-    @abstractmethod
-    def fit(self, dataloader: DataLoader):
-        pass
+    def fit(self, dataloader: DataLoader=None, corpus_dataloader: DataLoader=None) -> None:
+        """Learn from a corpus; a no-op unless the extractor has something to learn.
+
+        `dataloader` carries the labelled train split, `corpus_dataloader` the
+        wider unlabelled corpus (train plus gallery) when the harness allows
+        one. Anything estimated from labels must use the first; anything
+        estimated from descriptors alone may use the second.
+        """
 
 
 class DistanceKernel(ABC):

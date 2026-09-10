@@ -15,7 +15,7 @@ channels:
     config: config/config.yaml
     pooling: avg
     projection_head_size: 0
-    whiten: false
+    whiten: none
     is_trainable: false
     index: dense
     kernel: euclidean

@@ -20,6 +20,7 @@ class TrainConfig:
     epochs: int=20
     head_lr: float=0.00005
     backbone_lr: float=0.000005
+    unfrozen_backbone_blocks: int=0  # 0 keeps the backbone frozen; N trains its last N blocks
     weight_decay: float=0.0001
     margin: float=0.5
     sampler_P: int=8

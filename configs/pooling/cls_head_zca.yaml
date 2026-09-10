@@ -15,8 +15,8 @@ channels:
     config: config/config.yaml
     pooling: cls
     projection_head_size: 128
-    whiten: true
-    is_trainable: true
+    whiten: head_init
+    is_trainable: false
     index: dense
     kernel: euclidean
     weight: 1.0

@@ -78,10 +78,20 @@ class SearchEngine(Instrumented):
         self._gallery_prepared = False
 
 
-    def fit(self, train_dataloader: DataLoader):
+    def fit(self, train_dataloader: DataLoader, corpus_dataloader: DataLoader=None):
+        """Fit every channel that has something to learn.
+
+        Two corpora, because they are not interchangeable. `train_dataloader`
+        carries the labelled train split and is the only thing anything
+        supervised may see -- a triplet loss fitted on gallery labels would be
+        scoring itself. `corpus_dataloader` carries the wider unlabelled corpus
+        (train plus gallery) that a whitening or a vocabulary may use, since
+        those read descriptors and never labels. It falls back to the train
+        split when the harness does not offer one.
+        """
         for ch in self._channels:
             if ch.is_trainable:
-                ch.extractor.fit(train_dataloader)
+                ch.extractor.fit(train_dataloader, corpus_dataloader)
     
 
     @with_energy_consumption
