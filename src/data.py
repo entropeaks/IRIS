@@ -70,7 +70,8 @@ class Browser:
     def _iterate_on_files(self) -> Generator[Tuple[Path, str], None, None]:
         for class_dir in self._iterate_on_classes():
             for path in class_dir.iterdir():
-                yield path, class_dir.name
+                if not path.name.startswith('.'):
+                    yield path, class_dir.name
         
     def _iterate_on_classes(self) -> Generator[Path, None, None]:
         for class_dir in self.path.iterdir():
@@ -235,12 +236,12 @@ class DataPreparator():
         for class_name in sorted(train_classes):
             
             aug_class_dir = self.augmented_data_path / class_name
-            aug_images = [str(p) for p in aug_class_dir.glob('*.*')]
+            aug_images = [str(p) for p in aug_class_dir.glob('*.*') if not p.name.startswith('.')]
             train_paths.extend(aug_images)
             train_labels.extend([int(class_name)] * len(aug_images))
             
             orig_class_dir = self.original_data_path / class_name
-            orig_images = [str(p) for p in orig_class_dir.glob('*.*')]
+            orig_images = [str(p) for p in orig_class_dir.glob('*.*') if not p.name.startswith('.')]
             random.shuffle(orig_images)
             gallery_imgs = orig_images[:max_gallery_instances]
             gallery_paths.extend(gallery_imgs)
@@ -250,7 +251,7 @@ class DataPreparator():
         print("Processing Validation classes...")
         for class_name in sorted(val_classes):
             orig_class_dir = self.original_data_path / class_name
-            all_class_images = [str(p) for p in orig_class_dir.glob('*.*')]
+            all_class_images = [str(p) for p in orig_class_dir.glob('*.*') if not p.name.startswith('.')]
             random.shuffle(all_class_images)
             
             query_imgs = all_class_images[:k_query]
@@ -266,7 +267,7 @@ class DataPreparator():
         print("Processing Test classes...")
         for class_name in sorted(test_classes):
             orig_class_dir = self.original_data_path / class_name
-            all_class_images = [str(p) for p in orig_class_dir.glob('*.*')]
+            all_class_images = [str(p) for p in orig_class_dir.glob('*.*') if not p.name.startswith('.')]
             random.shuffle(all_class_images)
             
             query_imgs = all_class_images[:k_query]
