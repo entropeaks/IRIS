@@ -23,7 +23,7 @@ from torch.utils.data import DataLoader
 from torchvision.transforms import v2
 
 from src.core.engine import SearchEngine
-from src.data import CachedCollection, DataPreparator
+from src.data import CachedCollection, DataPreparator, PKSampler
 from src.distances.fusion import RRFBasedFusion
 from src.distances.index import BinaryStrategy, DenseIndex, SparseIndex, TFIDFStrategy
 from src.distances.kernels import (BhattacharyyaKernel, BinaryJaccardKernel,
@@ -68,6 +68,9 @@ FIT_CORPORA = ("train", "train+gallery", "all")
 @dataclass
 class DataSpec:
     path: str
+    augmented_path: str = None  # source of the train split; defaults to `path`
+    sampler_p: int = None       # classes per training batch; None iterates in file order
+    sampler_k: int = None       # images per class in a training batch
     k_folds: int = 4
     seeds: list[int] = field(default_factory=lambda: [42])
     gallery_instances: int = 1
@@ -243,6 +246,32 @@ def build_engine(config: ExperimentConfig, preprocessor: v2.Compose,
     )
 
 
+def _train_loader(config: ExperimentConfig, paths: list, labels: list,
+                  preprocessor: v2.Compose, collate) -> DataLoader:
+    """The train split, batched so a triplet loss has triplets to mine.
+
+    A triplet needs an anchor, a positive of its class and a negative of
+    another, all inside one batch. Iterating in file order gives whatever the
+    file order gives: four images per class and a batch of sixteen happens to
+    yield four classes of four, which works by luck, while sixteen images per
+    class yields one class and no negatives at all. The loss then mines zero
+    triplets and training silently does nothing while every epoch still prints
+    its line -- measured, an augmented split trained for ten epochs at two
+    different learning rates and returned the same score to three decimals.
+
+    `sampler_p` and `sampler_k` make the composition explicit, and together
+    they set the batch: `batch_size` then applies to the gallery and the
+    queries only. Left unset, the order is the file order, which is only safe
+    when the dataset happens to interleave classes.
+    """
+    dataset = CachedCollection(paths, labels, preprocessor=preprocessor)
+    if config.data.sampler_p and config.data.sampler_k:
+        return DataLoader(dataset, collate_fn=collate,
+                          batch_sampler=PKSampler(dataset, config.data.sampler_p,
+                                                  config.data.sampler_k))
+    return DataLoader(dataset, batch_size=config.data.batch_size, collate_fn=collate)
+
+
 def fit_corpus_split(mode: str, fold: dict) -> tuple[list, list]:
     """The images a descriptor-only fit may see, per `fit_corpus`.
 
@@ -290,7 +319,11 @@ def run(config: ExperimentConfig, quiet: bool = True) -> list[dict]:
     for seed in config.data.seeds:
         sink = io.StringIO() if quiet else None
         with contextlib.redirect_stdout(sink) if quiet else contextlib.nullcontext():
-            folds = DataPreparator(config.data.path, config.data.path, random_seed=seed).get_k_folds(
+            # gallery and queries always come from `path`; the train split may come
+            # from an augmented copy, which is the only split augmentation belongs in
+            folds = DataPreparator(config.data.path,
+                                   config.data.augmented_path or config.data.path,
+                                   random_seed=seed).get_k_folds(
                 config.data.k_folds, config.data.gallery_instances, config.data.n_query)
 
         for fold_index, fold in enumerate(folds):
@@ -310,9 +343,8 @@ def run(config: ExperimentConfig, quiet: bool = True) -> list[dict]:
                     # two corpora: anything reading labels gets the train split
                     # alone, anything reading descriptors gets what fit_corpus
                     # allows -- see `fit_corpus_split`
-                    train_loader = DataLoader(
-                        CachedCollection(train_paths, train_labels, preprocessor=preprocessor),
-                        batch_size=config.data.batch_size, collate_fn=collate)
+                    train_loader = _train_loader(config, train_paths, train_labels,
+                                                 preprocessor, collate)
                     corpus_paths, corpus_labels = fit_corpus_split(config.fit_corpus, fold)
                     corpus_loader = None if config.fit_corpus == "train" else DataLoader(
                         CachedCollection(corpus_paths, corpus_labels, preprocessor=preprocessor),

@@ -9,6 +9,12 @@ data:
   n_query: 1
   resize: 224
   batch_size: 16
+  # the only config here that trains, so the only one that needs its training
+  # batches to hold triplets. k matches the images per train class exactly (4):
+  # PKSampler wraps modulo, so a larger k would put an image in twice and hand
+  # the mining a positive at distance zero. Raise it alongside augmented_path.
+  sampler_p: 16
+  sampler_k: 4
 
 channels:
   - extractor: siamese
