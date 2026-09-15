@@ -37,6 +37,9 @@ from src.extractors import (BagOfVisualWords, DocTRTextExtractor, HSVExtractor,
 from src.feature_stores import InMemoryStore
 from src.rerankers import HSVReranker, ORBReranker
 from src.types import RetrievalChannel
+from src.preprocess import PolarTransform, YOLOCustomCrop
+
+PREPROCESSORS = {"polar": PolarTransform, "seg": YOLOCustomCrop, "resize": v2.Resize}
 
 EXTRACTORS = {"hsv": HSVExtractor, "orb": OrbFeatureExtractor,
               "sift": SIFTFeatureExtractor, "doctr": DocTRTextExtractor}
@@ -64,6 +67,31 @@ WHITEN_MODES = ("none", "post", "head_init")
 # which images a descriptor-only fit may see; labels never leave the train split
 FIT_CORPORA = ("train", "train+gallery", "all")
 
+@dataclass
+class PreprocessorSpec:
+    id: str = None
+    model_path: str = None
+    bg_color: tuple = None
+    detect_center: bool = None
+    size: int = None
+    preserve_aspect_ratio: bool = None
+
+    def __post_init__(self):
+
+        if self.id not in PREPROCESSORS:
+            raise ValueError(f"whiten must be one of {PREPROCESSORS}, got {self.id!r}")
+
+        if self.id == "seg" and not self.model_path:
+            raise ValueError("seg needs model_path")
+
+        if self.bg_color:
+            for i, value in enumerate(self.bg_color):
+                if (value < 0 or value > 255):
+                    raise ValueError(f"bg_color must contain [0-255] RGB values, got {value} at index {i}")
+            if len(self.bg_color) != 3:
+                raise ValueError(f"bg_color must be a 3-int tuple, got a {len(self.bg_color)}-int tuple instead")
+
+        
 
 @dataclass
 class DataSpec:
@@ -75,8 +103,8 @@ class DataSpec:
     seeds: list[int] = field(default_factory=lambda: [42])
     gallery_instances: int = 1
     n_query: int = 1
-    resize: int = 224
     batch_size: int = 32
+    preprocessors: list[PreprocessorSpec] = None
 
 
 @dataclass
@@ -230,7 +258,7 @@ def build_channel(spec: ChannelSpec) -> RetrievalChannel:
                             is_trainable=spec.needs_fit)
 
 
-def build_engine(config: ExperimentConfig, preprocessor: v2.Compose,
+def build_engine(config: ExperimentConfig, preprocessor: v2.Compose | None,
                  progress: bool=True) -> SearchEngine:
     reranker = RERANKERS[config.reranker.type]() if config.reranker else None
     return SearchEngine(
@@ -247,7 +275,7 @@ def build_engine(config: ExperimentConfig, preprocessor: v2.Compose,
 
 
 def _train_loader(config: ExperimentConfig, paths: list, labels: list,
-                  preprocessor: v2.Compose, collate) -> DataLoader:
+                  preprocessor: v2.Compose | None, collate) -> DataLoader:
     """The train split, batched so a triplet loss has triplets to mine.
 
     A triplet needs an anchor, a positive of its class and a negative of
@@ -305,11 +333,38 @@ def fit_corpus_split(mode: str, fold: dict) -> tuple[list, list]:
     return paths, labels
 
 
+def get_preprocessors(config: ExperimentConfig) -> v2.Compose:
+    preprocessors_list = config.data.preprocessors
+    preprocessors_instantiated = []
+    for preprocessor in preprocessors_list:
+        preprocessor_id = preprocessor.id
+        args = {}
+        if preprocessor_id == "seg":
+            args["model_path"] = preprocessor.model_path
+            if preprocessor.bg_color:
+                args["bg_color"] = preprocessor.bg_color
+        elif preprocessor_id == "polar":
+            if preprocessor.detect_center:
+                args["detect_center"] = preprocessor.detect_center
+        elif preprocessor_id == "resize":
+            if preprocessor.preserve_aspect_ratio:
+                args["size"] = preprocessor.size
+            else:
+                args["size"] = (preprocessor.size, preprocessor.size)
+        preprocessor_instance = PREPROCESSORS[preprocessor_id](**args)
+        preprocessors_instantiated.append(preprocessor_instance)
+
+    return v2.Compose(preprocessors_instantiated)
+
 def run(config: ExperimentConfig, quiet: bool = True) -> list[dict]:
     """Evaluate one configuration on every (seed, fold) draw, one record each."""
     import contextlib, io
 
-    preprocessor = v2.Resize((config.data.resize, config.data.resize))
+    if config.data.preprocessors:
+        preprocessor = get_preprocessors(config)
+    else:
+        preprocessor = None
+
     fingerprint = config.fingerprint()
     records = []
 

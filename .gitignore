@@ -9,9 +9,11 @@ data/
 *.pth
 notebooks/.ipynb_checkpoints/
 notebooks/draft.ipynb
+notebooks/_*
 wandb/
 model_checkpoints/
 config/config.yaml
+configs/
 outputs/
 
 __pycache__/

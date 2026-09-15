@@ -9,10 +9,11 @@ from abc import ABC, abstractmethod
 from typing import Tuple, Optional
 import logging
 
-from PIL import Image
+from PIL import Image, ImageOps
 import cv2
 import numpy as np
 from ultralytics import YOLO
+from torchvision.transforms import v2
 
 
 class Transform(ABC):
@@ -24,7 +25,7 @@ class Transform(ABC):
         return self.get_transformed(img_rgb)
 
     @abstractmethod
-    def get_transformed(self, img_rgb: Image) -> Image:
+    def get_transformed(self, img_rgb: Image.Image) -> Image.Image:
         pass
 
 class PolarTransform(Transform):
@@ -70,14 +71,19 @@ class YOLOCustomCrop(Transform):
         self._bg_color = bg_color
         logging.getLogger("ultralytics").setLevel(logging.WARNING)
         self._model = YOLO(model_path)
+        self.n_failures = 0
         
-    def get_transformed(self, image: Image) -> Image:
-        results =  self._model(image)
-        cropped_img = self._get_cropped(image, results[0])
+    def get_transformed(self, image: Image.Image) -> Image.Image:
+        result =  self._model(image, verbose=False)[0]
+        if result.masks is None or len(result.masks) == 0:
+            self.n_failures += 1
+            logging.warning("YOLOCustomCrop: No segmentation, image returned as-is.")
+            return image
+        cropped_img = self._get_cropped(image, result)
 
         return cropped_img
 
-    def _get_cropped(self, image: Image, result) -> Image:
+    def _get_cropped(self, image: Image.Image, result) -> Image.Image:
         img = np.array(image.convert("RGB"))
         h, w = img.shape[:2]
 
@@ -97,3 +103,4 @@ class YOLOCustomCrop(Transform):
         cropped = result_img[y:y+bh, x:x+bw]
 
         return Image.fromarray(cropped)
+    
