@@ -176,6 +176,40 @@ class BagOfVisualWords(ExtractorWrapper):
                                       n_init="auto", batch_size=4096).fit(descriptors)
 
 
+class VisualWordHistogram(BagOfVisualWords):
+    """The same vocabulary, counted into a fixed-length vector.
+
+    `BagOfVisualWords` emits one word id per keypoint, which is what
+    `SparseIndex` wants: a term list for TF-IDF over an inverted index, the
+    Video Google recipe. Everything dense needs the other canonical form --
+    `DenseIndex` stacks rows and cannot hold ragged ones, and a whitening has
+    no covariance to estimate from lists of different lengths. Counting the
+    words into one bin per centroid gives it, at `k` dimensions whatever the
+    keypoint count.
+
+    Only the counting differs, so the vocabulary is inherited rather than
+    refitted: both forms cluster the same corpus the same way.
+
+    Counts are square-rooted before the L2 normalisation. A handful of
+    centroids absorb a large share of the keypoints, and raw counts let those
+    bins dominate a euclidean distance the way a stop word dominates a word
+    count; the square root is the standard power normalisation that flattens
+    them. It also leaves the vector better conditioned for a whitening applied
+    afterwards.
+    """
+
+    def get_features(self, imgs_arrays_rgb: list[np.ndarray]) -> list[np.ndarray]:
+        histograms = []
+        for words in super().get_features(imgs_arrays_rgb):
+            counts = np.bincount(np.asarray(words, dtype=int),
+                                 minlength=self.kmeans.n_clusters).astype(np.float64)
+            counts = np.sqrt(counts)
+            # an image with no keypoint at all stays the zero vector rather
+            # than becoming a division by zero
+            histograms.append(counts / (np.linalg.norm(counts) + 1e-12))
+        return histograms
+
+
 class Whitened(ExtractorWrapper):
     """Wraps an extractor, whitening the descriptors it produces.
 
@@ -199,9 +233,11 @@ class Whitened(ExtractorWrapper):
     wider than the labelled train split -- see `whiten_fit_on` in the harness.
     """
 
-    def __init__(self, extractor: FeatureExtractor, eps_rel: float=0.05):
+    def __init__(self, extractor: FeatureExtractor, eps_rel: float=0.05,
+                 n_components: int=None):
         super().__init__(extractor)
         self.eps_rel = eps_rel
+        self.n_components = n_components
         self.whitener = None
 
     def get_features(self, imgs_arrays_rgb: list[np.ndarray]) -> list[np.ndarray]:
@@ -223,7 +259,8 @@ class Whitened(ExtractorWrapper):
 
         if not pool:
             raise RuntimeError("nothing to fit the whitening on")
-        self.whitener = ZCAWhitening(eps_rel=self.eps_rel).fit(np.vstack(pool))
+        self.whitener = ZCAWhitening(eps_rel=self.eps_rel,
+                                     n_components=self.n_components).fit(np.vstack(pool))
 
 
 N_ROTATION_VIEWS = 4

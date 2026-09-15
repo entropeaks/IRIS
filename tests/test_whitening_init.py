@@ -12,9 +12,25 @@ import torch
 from torch import nn
 
 from src.experiments import ChannelSpec, build_extractor, fit_corpus_split
-from src.extractors import RotationAveraged, Whitened
+from src.extractors import (BagOfVisualWords, OrbFeatureExtractor,
+                            RotationAveraged, VisualWordHistogram, Whitened)
 from src.postprocess import ZCAWhitening
 from src.types import FeatureExtractor
+
+
+def cornered_image(seed: int, size: int = 128) -> np.ndarray:
+    """Random rectangles on a flat ground, so ORB has corners to detect.
+
+    Uniform noise gives it nothing: the detector wants intensity corners, and
+    smoothing turns pixel noise into flat grey.
+    """
+    rng = np.random.default_rng(seed)
+    img = np.full((size, size, 3), 40, dtype=np.uint8)
+    for _ in range(6):
+        x, y = rng.integers(0, size - 30, 2)
+        w, h = rng.integers(12, 30, 2)
+        img[y:y + h, x:x + w] = rng.integers(120, 255, 3, dtype=np.uint8)
+    return img
 
 
 def anisotropic_descriptors(n: int = 400, dim: int = 48, seed: int = 0) -> np.ndarray:
@@ -48,6 +64,36 @@ def test_full_rank_projection_preserves_zca_distances():
     assert projection.shape == (features.shape[1], features.shape[1])
     # float32, because ZCAWhitening.transform returns float32
     assert np.abs(pairwise(whitener.transform(features)) - pairwise(folded)).max() < 1e-5
+
+
+def test_truncated_fit_agrees_with_the_full_one():
+    """Same decomposition, read off an (n, d) matrix instead of a (d, d) one.
+
+    Where the corpus can measure every direction the two must agree exactly;
+    the truncated path exists for width, not for a different answer. At d=8192
+    with 300 samples it fits in 0.1s against 60s, and never builds the 537 MB
+    covariance.
+    """
+    features = anisotropic_descriptors(n=400, dim=40)
+    full = ZCAWhitening(eps_rel=0.05).fit(features)
+    truncated = ZCAWhitening(eps_rel=0.05, n_components=40).fit(features)
+
+    assert np.abs(pairwise(full.transform(features))
+                  - pairwise(truncated.transform(features))).max() < 1e-5
+
+
+def test_truncation_drops_directions_the_corpus_cannot_measure():
+    """With n < d the covariance has rank n-1, so the rest is unmeasured.
+
+    Full rank keeps them and amplifies them by the eigenvalue floor, which is
+    how a whitening turns into a noise generator on a VLAD-width descriptor.
+    """
+    features = anisotropic_descriptors(n=30, dim=120)
+    truncated = ZCAWhitening(eps_rel=0.05, n_components=16).fit(features)
+
+    assert truncated.transform(features).shape == (30, 16)
+    # the full-rank path keeps all 120, of which at most 29 were measured
+    assert ZCAWhitening(eps_rel=0.05).fit(features).transform(features).shape == (30, 120)
 
 
 def test_projection_keeps_the_strongest_directions():
@@ -210,6 +256,39 @@ def test_head_init_keeps_the_rotation_averaging_below_the_head():
     assert isinstance(post, Whitened) and isinstance(post.extractor, RotationAveraged)
     # nothing wraps the model: it averages below its own head instead
     assert head_init is base
+
+
+def test_visual_words_count_into_a_fixed_length_vector():
+    """The term list is ragged by construction; the histogram cannot be.
+
+    A whitening has no covariance to estimate from rows of different lengths,
+    and DenseIndex cannot stack them either, so this is what makes a dense
+    bag-of-words channel possible at all.
+    """
+    images = [cornered_image(seed) for seed in range(12)]
+    loader = [(images, list(range(len(images))))]
+
+    histogram = VisualWordHistogram(OrbFeatureExtractor(), vocabulary_size=8)
+    histogram.fit(loader)
+    described = np.asarray(histogram.get_features(images))
+
+    assert described.shape == (len(images), histogram.kmeans.n_clusters)
+    assert np.allclose(np.linalg.norm(described, axis=1), 1.0)
+
+    # the sparse form keeps its one-word-per-keypoint contract
+    terms = BagOfVisualWords(OrbFeatureExtractor(), vocabulary_size=8)
+    terms.fit(loader)
+    assert all(isinstance(t, list) for t in terms.get_features(images))
+
+
+def test_an_image_without_keypoints_does_not_divide_by_zero():
+    histogram = VisualWordHistogram(OrbFeatureExtractor(), vocabulary_size=4)
+    histogram.fit([([cornered_image(s) for s in range(8)], list(range(8)))])
+
+    blank = np.zeros((128, 128, 3), dtype=np.uint8)   # ORB finds no corner here
+    described = np.asarray(histogram.get_features([blank]))
+    assert described.shape == (1, histogram.kmeans.n_clusters)
+    assert np.all(np.isfinite(described)) and described.sum() == 0
 
 
 def test_fit_corpus_widens_without_ever_adding_labels_to_training():

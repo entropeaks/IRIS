@@ -33,7 +33,7 @@ from src.config import load_config
 from src.extractors import (BagOfVisualWords, DocTRTextExtractor, HSVExtractor,
                             MockRun, N_ROTATION_VIEWS, OrbFeatureExtractor,
                             SIFTFeatureExtractor, RotationAveraged, SiameseDino,
-                            Whitened)
+                            VisualWordHistogram, Whitened)
 from src.feature_stores import InMemoryStore
 from src.rerankers import HSVReranker, ORBReranker
 from src.types import RetrievalChannel
@@ -118,6 +118,7 @@ class ChannelSpec:
     vocabulary_size: int = 256  # <name>-bovw -- number of visual words
     whiten: str = "none"        # none | post | head_init -- see WHITEN_MODES
     whiten_eps_rel: float = 0.05
+    whiten_components: int = None  # keep only the k strongest directions; None keeps all
     rotation_tta: bool = False  # average over the four 90-degree rotations
     pooling: str = None         # extractor: siamese -- cls | gem | avg, else the model config's
     projection_head_size: int = None  # extractor: siamese -- 0 drops the head
@@ -215,14 +216,19 @@ def build_extractor(spec: ChannelSpec):
     if spec.rotation_tta and spec.whiten != "head_init":
         extractor = RotationAveraged(extractor)
     if spec.whiten == "post":
-        extractor = Whitened(extractor, eps_rel=spec.whiten_eps_rel)
+        extractor = Whitened(extractor, eps_rel=spec.whiten_eps_rel,
+                             n_components=spec.whiten_components)
     return extractor
 
 
 def _base_extractor(spec: ChannelSpec):
     if spec.extractor.endswith("-bovw"):
         base = EXTRACTORS[spec.extractor.removesuffix("-bovw")]()
-        return BagOfVisualWords(base, vocabulary_size=spec.vocabulary_size)
+        # the index decides the form the same vocabulary takes: a sparse index
+        # wants the term list it can weight with TF-IDF, a dense one the counted
+        # histogram, which is also the only form a whitening can be fitted on
+        quantiser = BagOfVisualWords if spec.index == "sparse" else VisualWordHistogram
+        return quantiser(base, vocabulary_size=spec.vocabulary_size)
     if spec.extractor != "siamese":
         return EXTRACTORS[spec.extractor]()
 
