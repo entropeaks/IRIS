@@ -35,7 +35,7 @@ from src.extractors import (BagOfVisualWords, DocTRTextExtractor, HSVExtractor,
                             SIFTFeatureExtractor, RotationAveraged, SiameseDino,
                             VisualWordHistogram, Whitened)
 from src.feature_stores import InMemoryStore
-from src.rerankers import HSVReranker, ORBReranker
+from src.rerankers import HSVReranker, ORBReranker, SIFTReranker
 from src.types import RetrievalChannel
 from src.preprocess import PolarTransform, YOLOCustomCrop
 
@@ -48,7 +48,7 @@ EXTRACTORS = {"hsv": HSVExtractor, "orb": OrbFeatureExtractor,
 KERNELS = {"bhattacharyya": BhattacharyyaKernel, "euclidean": EuclidianDistanceKernel,
            "jaccard": BinaryJaccardKernel}
 WEIGHTINGS = {"binary": BinaryStrategy, "tfidf": TFIDFStrategy}
-RERANKERS = {"hsv": HSVReranker, "orb": ORBReranker}
+RERANKERS = {"hsv": HSVReranker, "orb": ORBReranker, "sift": SIFTReranker}
 # where the whitening is applied: nowhere, on the descriptors an extractor hands
 # out, or folded into the projection head's initialisation.
 #
