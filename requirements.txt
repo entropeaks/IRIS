@@ -3,7 +3,7 @@ aiofiles==25.1.0
 alembic==1.17.1
 annotated-types==0.7.0
 antlr4-python3-runtime==4.9.3
-anyio==4.11.0
+anyio==4.14.2
 appnope==0.1.4
 argcomplete==3.6.3
 asttokens==3.0.0
