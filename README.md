@@ -26,52 +26,55 @@ script reads those records afterwards.
 pip install -e .
 cp config/config.example.yaml config/config.yaml   # only for the deep channels
 
-python scripts/evaluate.py configs/hsv.yaml configs/siamese.yaml --out results/records.jsonl
-python scripts/report.py results/records.jsonl --against hsv --groups miscellaneous/groups.json
+python scripts/evaluate.py configs/orb_bovw.yaml configs/orb_bovw_sift.yaml --out results/records.jsonl
+python scripts/report.py results/records.jsonl --against orb-bovw
 ```
 
 A config names the data, the retrieval channels and how their rankings combine:
 
 ```yaml
-name: hsv
+name: orb-bovw
 data:
   path: /path/to/dataset          # one directory per class
   k_folds: 4
   seeds: [42, 43, 44]
 channels:
-  - extractor: hsv                # hsv | orb | doctr | siamese
+  - extractor: orb-bovw           # hsv | orb | sift | doctr | siamese | <name>-bovw
     index: dense                  # dense | sparse
-    kernel: bhattacharyya         # bhattacharyya | euclidean | jaccard
+    kernel: euclidean             # bhattacharyya | euclidean | jaccard
+    whiten: post                  # none | post | head_init
     weight: 1.0                   # its say during fusion
 recall_k: [1, 3, 5]
 ```
 
-The report gives recall, cost and a paired comparison:
+The report gives recall, cost and a paired comparison. Adding SIFT geometric
+verification on top of the top 10 candidates, over 40 draws:
 
 ```
-experiment                draws           R@1           R@3           R@5
-siamese                      12    19.3+/-8.8      26.8+/-9.8      31.7+/-9.9
-hsv                          12     8.5+/-4.8      20.6+/-6.0      27.8+/-6.2
-hsv-reranked                 12     8.5+/-4.8      20.6+/-6.0      27.8+/-6.2
+experiment                    draws         R@1         R@3         R@5
+orb-bovw+sift                    40  83.0+/-6.2  90.9+/-5.1  92.8+/-4.6
+orb-bovw                         40  73.4+/-7.9  84.7+/-6.4  89.1+/-5.5
 
-experiment                       evaluate (ms)  prepare_gallery (ms)
-hsv                                       11.3                  40.5
-hsv-reranked                             129.7                  41.5
-siamese                                  253.5                1012.9
+experiment                          evaluate (ms)   prepare_gallery (ms)
+orb-bovw                                    165.6                  654.3
+orb-bovw+sift                              2479.0                  662.2
 
-Paired against hsv, Wilcoxon signed-rank, * = p<0.05
-experiment                shared   gap R@1   win/loss         p
-hsv-reranked                  12     +0.00        0/0         1
-siamese                       12    +10.81       10/1     0.002 *
+Paired against orb-bovw
+experiment                     shared   gap R@1   win/loss
+orb-bovw+sift                      40     +9.53       37/2
 ```
 
 Three things this layout buys:
 
-* **Records are per split, not averaged.** Two configurations are compared on the
-  draws they share, because a single split here carries several points of recall
-  noise and an unpaired difference of a few points means nothing.
-* **Cost sits beside accuracy.** Reranking HSV with HSV above costs 11× more per
-  query for exactly nothing — a fact no recall column alone would surface.
+* **Records are per split, not averaged.** Two configurations are compared only
+  on the draws they share, because a single split here carries several points of
+  recall noise. Averaging throws that pairing away: `+9.53` above is the mean of
+  40 differences measured on the same data, and `37/2` says SIFT won 37 of them
+  and lost 2 — far more convincing than two averages that happen to differ.
+* **Cost sits beside accuracy.** Those 9.5 points cost 15x the query time, 166 ms
+  to 2479 ms. Indexing barely moves, because the work is per comparison, not per
+  gallery image. Whether that trade is worth taking depends on the application,
+  and no recall column alone would surface it.
 * **The report never runs anything.** A new question costs a read of the records
   rather than another evaluation.
 
