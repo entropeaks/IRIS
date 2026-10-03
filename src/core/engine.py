@@ -47,11 +47,11 @@ class SearchEngine(Instrumented):
     
     def __init__(
         self,
-        preprocessor: v2.Compose,
+        preprocessor: v2.Compose | None,
         channels: List[RetrievalChannel],
         gallery_store: FeatureStore,
         fusion_strategy: RRFBasedFusion,
-        reranker: Reranker=None,
+        reranker: Reranker | None = None,
         top_k_candidates: int=50,
         time_it: bool=True,
         evaluate_energy_consumption: bool=True,
@@ -222,7 +222,10 @@ class SearchEngine(Instrumented):
 
 
     def _load(self, image_path: str) -> np.ndarray:
-        return np.array(self._preprocessor(load_image(image_path)))
+        img = load_image(image_path)
+        if self._preprocessor:
+            img = self._preprocessor(img)
+        return np.array(img)
 
 
     def _rank_gallery(self, image: np.ndarray) -> np.ndarray:

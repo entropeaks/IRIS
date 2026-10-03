@@ -331,8 +331,8 @@ class ImageCollectionDataset(ABC):
     def __init__(self,
                  images_paths: list[Path],
                  labels: list[int],
-                 preprocessor: v2.Compose=None,
-                 transform: v2.Compose=None):
+                 preprocessor: v2.Compose | None = None,
+                 transform: v2.Compose | None = None):
         
         self.images_paths = images_paths
         self.labels = labels
@@ -357,8 +357,8 @@ class CachedCollection(ImageCollectionDataset, Dataset):
     def __init__(self,
                  images_paths: list[Path],
                  labels: list[int],
-                 preprocessor: v2.Compose=None,
-                 transform: v2.Compose=None):
+                 preprocessor: v2.Compose | None = None,
+                 transform: v2.Compose | None = None):
         
         super().__init__(images_paths, labels, preprocessor, transform)
         self.images_instances = self._load_images()
@@ -367,7 +367,8 @@ class CachedCollection(ImageCollectionDataset, Dataset):
         images_instances = []
         for path in self.images_paths:
             img = load_image(path)
-            img = self.preprocessor(img)
+            if self.preprocessor:
+                img = self.preprocessor(img)
             images_instances.append(img)
         return images_instances
 
@@ -386,8 +387,8 @@ class LazyLoadCollection(ImageCollectionDataset, Dataset):
     def __init__(self,
                  images_paths: list[Path],
                  labels: list[int],
-                 preprocessor: v2.Compose=None,
-                 transform: v2.Compose=None):
+                 preprocessor: v2.Compose | None = None,
+                 transform: v2.Compose | None = None):
         super().__init__(images_paths, labels, preprocessor, transform)
 
     def __len__(self):
@@ -395,7 +396,8 @@ class LazyLoadCollection(ImageCollectionDataset, Dataset):
 
     def __getitem__(self, idx) -> Tuple[np.ndarray, int]:
         img = load_image(self.images_paths[idx])
-        img = self.preprocessor(img)
+        if self.preprocessor:
+            img = self.preprocessor(img)
         if self.transform:
             img = self.transform(img)
         label = self.labels[idx]

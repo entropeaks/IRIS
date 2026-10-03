@@ -24,8 +24,27 @@ class ZCAWhitening:
     between 0.02 and 0.1 behave equivalently on this data.
     """
 
-    def __init__(self, eps_rel: float = 0.05):
+    def __init__(self, eps_rel: float = 0.05, n_components: int = None):
+        """`n_components` keeps only that many directions, strongest first.
+
+        It also changes how the fit is computed, because the two cannot be
+        separated cheaply. Full rank needs the `(d, d)` covariance and its
+        eigendecomposition; truncated takes the SVD of the centred data
+        instead, which costs `O(n^2 d)` rather than `O(d^3)` and never forms
+        the covariance at all. At d=8192 that is the difference between a
+        537 MB matrix and a few hundred rows.
+
+        The two agree on every direction the data can measure. They differ on
+        the ones it cannot: a `(n, d)` corpus pins down at most `n - 1`
+        directions, and full rank keeps the remaining `d - n + 1` -- flooring
+        their eigenvalues, so they are amplified by `floor**-0.5` although
+        nothing was measured along them. That is survivable when `n` is close
+        to `d` and ruinous when it is not, which is why anything wider than a
+        backbone descriptor should pass this.
+        """
         self.eps_rel = eps_rel
+        self.n_components = n_components
+        self.projection_ = None
         self.mean_ = None
         self.whitener_ = None
         self.eigenvalues_ = None
@@ -35,6 +54,8 @@ class ZCAWhitening:
         features = np.asarray(features, dtype=np.float64)
         self.mean_ = features.mean(axis=0)
         centered = features - self.mean_
+        if self.n_components is not None:
+            return self._fit_truncated(centered)
         # Apple's Accelerate BLAS raises spurious FP flags on well-scaled matmuls,
         # so silence them locally rather than touching global numpy state
         with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
@@ -46,6 +67,31 @@ class ZCAWhitening:
             eigenvalues = np.clip(eigenvalues, floor, None)
             self.eigenvalues_, self.eigenvectors_ = eigenvalues, eigenvectors
             self.whitener_ = eigenvectors @ np.diag(eigenvalues ** -0.5) @ eigenvectors.T
+        return self
+
+    def _fit_truncated(self, centered: np.ndarray) -> "ZCAWhitening":
+        """Fit from the SVD of the centred data, keeping `n_components`.
+
+        The right singular vectors are the covariance's eigenvectors and the
+        squared singular values its eigenvalues, so this is the same
+        decomposition read off a matrix that is `n` rows tall instead of `d`
+        wide. The floor is the same one, and the trace it is relative to is the
+        sum of every eigenvalue, which the singular values give without the
+        covariance ever being built.
+        """
+        n_samples, n_features = centered.shape
+        with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+            _, singular, components = np.linalg.svd(centered, full_matrices=False)
+
+        eigenvalues = singular ** 2 / max(n_samples - 1, 1)
+        floor = self.eps_rel * eigenvalues.sum() / n_features
+        self.n_floored_ = int((eigenvalues[:self.n_components] < floor).sum())
+        eigenvalues = np.clip(eigenvalues, floor, None)
+
+        keep = min(self.n_components, len(eigenvalues))
+        self.eigenvalues_ = eigenvalues[:keep][::-1]        # projection() reverses back
+        self.eigenvectors_ = components[:keep].T[:, ::-1]
+        self.projection_ = components[:keep].T * eigenvalues[:keep] ** -0.5
         return self
 
     def projection(self, n_components: int = None) -> tuple[np.ndarray, np.ndarray]:
@@ -77,10 +123,11 @@ class ZCAWhitening:
         return eigenvectors[:, :k] * eigenvalues[:k] ** -0.5, self.mean_
 
     def transform(self, features: np.ndarray) -> np.ndarray:
-        if self.whitener_ is None:
+        matrix = self.whitener_ if self.projection_ is None else self.projection_
+        if matrix is None:
             raise RuntimeError("ZCAWhitening.transform called before fit")
         with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
-            projected = (np.asarray(features, dtype=np.float64) - self.mean_) @ self.whitener_
+            projected = (np.asarray(features, dtype=np.float64) - self.mean_) @ matrix
         projected /= np.linalg.norm(projected, axis=-1, keepdims=True) + 1e-12
         return projected.astype(np.float32)
 

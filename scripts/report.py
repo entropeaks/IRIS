@@ -18,7 +18,6 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
-from scipy.stats import wilcoxon
 
 from src.experiments import load_records
 
@@ -61,7 +60,7 @@ def paired_table(grouped: dict, baseline: str, recall_k: list[str]) -> str:
     """Compare each experiment to the baseline on the draws they share."""
     reference = {(r["seed"], r["fold"]): r for r in grouped[baseline]}
     header = (f"{'experiment':<24}{'shared':>8}{'gap R@1':>10}"
-              f"{'win/loss':>11}{'p':>10}")
+              f"{'win/loss':>11}")
     lines = [header, "-" * len(header)]
     for name, records in sorted(grouped.items()):
         if name == baseline:
@@ -72,10 +71,8 @@ def paired_table(grouped: dict, baseline: str, recall_k: list[str]) -> str:
             lines.append(f"{name:<24}{'0':>8}   no shared draw")
             continue
         gaps = np.array([(a["recall"]["1"] - b["recall"]["1"]) * 100 for a, b in pairs])
-        p = wilcoxon(gaps).pvalue if np.any(gaps != 0) else 1.0
-        flag = " *" if p < 0.05 else ""
         lines.append(f"{name:<24}{len(pairs):>8}{gaps.mean():>+10.2f}"
-                     f"{f'{(gaps > 0).sum()}/{(gaps < 0).sum()}':>11}{p:>10.2g}{flag}")
+                     f"{f'{(gaps > 0).sum()}/{(gaps < 0).sum()}':>11}")
     return "\n".join(lines)
 
 
@@ -126,7 +123,7 @@ def main():
     if args.against:
         if args.against not in grouped:
             raise SystemExit(f"no experiment named {args.against!r}; have {sorted(grouped)}")
-        print(f"\nPaired against {args.against}, Wilcoxon signed-rank, * = p<0.05\n")
+        print(f"\nPaired against {args.against}\n")
         print(paired_table(grouped, args.against, recall_k))
 
     print("\nMost frequent confusions")
