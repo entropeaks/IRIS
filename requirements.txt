@@ -174,7 +174,7 @@ texttable==1.7.0
 threadpoolctl==3.6.0
 tifffile==2025.10.16
 tokenizers==0.22.0
-torch==2.8.0
+torch==2.13.0
 torchao==0.13.0
 torchvision==0.23.0
 tornado==6.5.2
