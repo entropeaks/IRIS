@@ -128,7 +128,7 @@ pydantic_core==2.41.4
 pydash==8.0.5
 Pygments==2.19.2
 PyMatting==1.1.14
-pymongo==4.9.2
+pymongo==4.18.3
 PyNaCl==1.6.0
 pynndescent==0.5.13
 pyparsing==3.2.4
